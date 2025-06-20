@@ -1,0 +1,10 @@
+---
+- hosts: localhost
+  gather_facts: true
+
+## Make sure we have all the dependencies needed for deployment
+- name: Install dependencies
+  become: true
+  ansible.builtin.dnf:
+    name: "{{ common_dependencies }}"
+
