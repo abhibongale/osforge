@@ -58,13 +58,19 @@ advanced:
   # Persist MySQL data between runs (faster startup but uses disk)
   persist_mysql: false
 
+# Default branch (optional)
+# If not specified, uses master
+default_branch: master  # or stable/2026.1
+
 # Job-specific overrides (optional)
 jobs:
   # Override settings for specific jobs
   ironic-tempest-bios-ipmi-autodetect:
     resources:
       memory: 10G  # This job needs more memory
+    branch: stable/2026.1  # Test against stable
 
-  ironic-tempest-uefi-redfish:
-    repos:
-      ironic: ~/dev/ironic-uefi-branch  # Use different branch
+  devstack-platform-rocky-blue-onyx:
+    branch: stable/2026.1  # Always test stable for this job
+    resources:
+      memory: 12G

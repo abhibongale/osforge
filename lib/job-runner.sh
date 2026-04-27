@@ -6,9 +6,14 @@ run_job() {
     local job_name="$1"
     local ironic_repo="$2"
     local ipa_repo="$3"
-    local verbose="$4"
-    local keep="$5"
-    local no_pull="$6"
+    local devstack_repo="$4"
+    local nova_repo="$5"
+    local neutron_repo="$6"
+    local branch="$7"
+    local devstack_branch="$8"
+    local verbose="$9"
+    local keep="${10}"
+    local no_pull="${11}"
 
     # Enable verbose logging if requested
     if [[ "$verbose" == "true" ]]; then
@@ -51,6 +56,13 @@ run_job() {
     log_step "Setting up services..."
     if ! setup_services; then
         log_error "Failed to setup services"
+        container_stop
+        exit 1
+    fi
+
+    # Checkout branches if specified
+    if ! checkout_branches "$branch" "$devstack_branch"; then
+        log_error "Failed to checkout branches"
         container_stop
         exit 1
     fi
@@ -126,6 +138,60 @@ setup_services() {
     sleep 3
 
     log_success "All services started"
+    return 0
+}
+
+# Checkout specific branches in container
+checkout_branches() {
+    local branch="$1"
+    local devstack_branch="$2"
+
+    # If no branches specified, nothing to do
+    if [[ -z "$branch" ]] && [[ -z "$devstack_branch" ]]; then
+        return 0
+    fi
+
+    log_info "Checking out branches..."
+
+    # Checkout DevStack branch (takes precedence over global branch)
+    local ds_branch="${devstack_branch:-$branch}"
+    if [[ -n "$ds_branch" ]]; then
+        log_info "Checking out DevStack branch: $ds_branch"
+        if ! container_exec /usr/local/bin/checkout-branch.sh /opt/stack/devstack "$ds_branch"; then
+            log_error "Failed to checkout DevStack branch: $ds_branch"
+            return 1
+        fi
+    fi
+
+    # Checkout global branch for all other repos
+    if [[ -n "$branch" ]]; then
+        # List of repos to checkout (skip devstack if we already did it)
+        local repos=(
+            "ironic"
+            "ironic-python-agent"
+            "nova"
+            "neutron"
+            "glance"
+            "keystone"
+            "cinder"
+            "tempest"
+        )
+
+        for repo in "${repos[@]}"; do
+            local repo_path="/opt/stack/$repo"
+
+            # Check if repo exists in container
+            if container_exec test -d "$repo_path/.git" 2>/dev/null; then
+                log_info "Checking out $repo branch: $branch"
+                if ! container_exec /usr/local/bin/checkout-branch.sh "$repo_path" "$branch"; then
+                    log_warn "Failed to checkout $repo branch (may not exist): $branch"
+                    # Don't fail the whole job, just warn
+                fi
+            fi
+        done
+    fi
+
+    log_success "Branch checkout complete"
     return 0
 }
 
