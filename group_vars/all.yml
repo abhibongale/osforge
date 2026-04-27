@@ -1,8 +1,0 @@
----
-
-# --- Common Prerequsites packages needed --- #
-common_dependencies:
-  - git
-  - python3
-  - podman
-  - podman-compose
