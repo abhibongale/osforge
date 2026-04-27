@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OSForge specific
+.osforge/
+*.log
+logs/
+cache/
+
+# Container images
+*.tar
+*.tar.gz
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Test outputs
+.testrepository/
+.tox/
+htmlcov/
+.coverage
+.pytest_cache/
+
+# User config
+config/local.yaml
+config/user.yaml

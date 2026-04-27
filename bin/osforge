@@ -1,0 +1,233 @@
+#!/bin/bash
+# OSForge - Local OpenStack CI Runner
+# Run Zuul CI jobs locally in containers against your code changes
+
+set -euo pipefail
+
+# Version
+OSFORGE_VERSION="0.1.0-dev"
+
+# Determine installation directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OSFORGE_ROOT="$(dirname "$SCRIPT_DIR")"
+OSFORGE_LIB="${OSFORGE_LIB:-$OSFORGE_ROOT/lib}"
+OSFORGE_CONFIG="${OSFORGE_CONFIG:-$OSFORGE_ROOT/config}"
+OSFORGE_USER_DIR="${OSFORGE_USER_DIR:-$HOME/.osforge}"
+
+# Load libraries
+# shellcheck source=lib/common.sh
+source "$OSFORGE_LIB/common.sh"
+# shellcheck source=lib/logging.sh
+source "$OSFORGE_LIB/logging.sh"
+# shellcheck source=lib/container.sh
+source "$OSFORGE_LIB/container.sh"
+# shellcheck source=lib/job-runner.sh
+source "$OSFORGE_LIB/job-runner.sh"
+
+# Main command dispatcher
+main() {
+    # Initialize
+    init_osforge
+
+    # Parse command
+    local command="${1:-}"
+
+    case "$command" in
+        run)
+            shift
+            cmd_run "$@"
+            ;;
+        logs)
+            shift
+            cmd_logs "$@"
+            ;;
+        shell)
+            shift
+            cmd_shell "$@"
+            ;;
+        status)
+            shift
+            cmd_status "$@"
+            ;;
+        stop)
+            shift
+            cmd_stop "$@"
+            ;;
+        clean)
+            shift
+            cmd_clean "$@"
+            ;;
+        list-jobs|list)
+            shift
+            cmd_list_jobs "$@"
+            ;;
+        version|--version|-v)
+            echo "OSForge version $OSFORGE_VERSION"
+            ;;
+        help|--help|-h|"")
+            cmd_help
+            ;;
+        *)
+            log_error "Unknown command: $command"
+            echo ""
+            cmd_help
+            exit 1
+            ;;
+    esac
+}
+
+# Command: run - Run a Zuul job
+cmd_run() {
+    local job_name=""
+    local ironic_repo=""
+    local ipa_repo=""
+    local verbose=false
+    local keep=false
+    local no_pull=false
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --ironic-repo)
+                ironic_repo="$2"
+                shift 2
+                ;;
+            --ipa-repo)
+                ipa_repo="$2"
+                shift 2
+                ;;
+            --verbose)
+                verbose=true
+                shift
+                ;;
+            --keep)
+                keep=true
+                shift
+                ;;
+            --no-pull)
+                no_pull=true
+                shift
+                ;;
+            -*)
+                log_error "Unknown option: $1"
+                exit 1
+                ;;
+            *)
+                if [[ -z "$job_name" ]]; then
+                    job_name="$1"
+                else
+                    log_error "Unexpected argument: $1"
+                    exit 1
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$job_name" ]]; then
+        log_error "Job name required"
+        echo "Usage: osforge run <job-name> [options]"
+        exit 1
+    fi
+
+    # Auto-detect ironic repo if in ironic directory
+    if [[ -z "$ironic_repo" ]] && [[ -f "setup.py" ]] && grep -q "name.*ironic" setup.py 2>/dev/null; then
+        ironic_repo="$(pwd)"
+        log_info "Auto-detected Ironic repo: $ironic_repo"
+    fi
+
+    # Run the job
+    run_job "$job_name" "$ironic_repo" "$ipa_repo" "$verbose" "$keep" "$no_pull"
+}
+
+# Command: logs - View logs from last run
+cmd_logs() {
+    local service="${1:-all}"
+    show_logs "$service"
+}
+
+# Command: shell - Open shell in container
+cmd_shell() {
+    open_shell
+}
+
+# Command: status - Show status of running job
+cmd_status() {
+    show_status
+}
+
+# Command: stop - Stop running job
+cmd_stop() {
+    stop_job
+}
+
+# Command: clean - Clean up containers and volumes
+cmd_clean() {
+    local keep_logs="${1:-5}"
+    cleanup "$keep_logs"
+}
+
+# Command: list-jobs - List available jobs
+cmd_list_jobs() {
+    list_available_jobs
+}
+
+# Command: help - Show help
+cmd_help() {
+    cat << 'EOF'
+OSForge - Local OpenStack CI Runner
+
+USAGE:
+    osforge <command> [options]
+
+COMMANDS:
+    run <job-name>      Run a specific Zuul job
+    logs [service]      View logs from last run
+    shell               Open interactive shell in container
+    status              Show status of running job
+    stop                Stop running job
+    clean [keep]        Clean up containers and volumes
+    list-jobs           List available jobs
+    version             Show version
+    help                Show this help
+
+RUN OPTIONS:
+    --ironic-repo <path>    Path to local Ironic repository
+    --ipa-repo <path>       Path to local Ironic Python Agent repository
+    --verbose               Enable verbose output
+    --keep                  Keep container running after test
+    --no-pull               Don't pull base image before run
+
+EXAMPLES:
+    # Run job from ironic directory (auto-detects repo)
+    cd ~/dev/ironic
+    osforge run ironic-tempest-bios-ipmi-autodetect
+
+    # Run with explicit repo path
+    osforge run ironic-tempest-bios-ipmi-autodetect --ironic-repo ~/dev/ironic
+
+    # View logs
+    osforge logs
+    osforge logs ironic-conductor
+
+    # Debug in shell
+    osforge shell
+
+    # Clean up
+    osforge clean
+
+ENVIRONMENT:
+    OSFORGE_ROOT        OSForge installation directory
+    OSFORGE_USER_DIR    User data directory (default: ~/.osforge)
+
+FILES:
+    ~/.osforge/config.yaml          User configuration
+    ~/.osforge/logs/                Test run logs
+    ~/.osforge/cache/               Downloaded images
+
+For more information, see: https://github.com/abhibongale/osforge
+EOF
+}
+
+# Run main
+main "$@"

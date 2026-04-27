@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  osforge-runner:
+    image: quay.io/osforge/base:latest
+    container_name: osforge-runner
+    privileged: true
+
+    devices:
+      - /dev/kvm
+
+    cap_add:
+      - SYS_ADMIN
+
+    volumes:
+      # Mount user's code (override with -v)
+      - ${IRONIC_REPO:-./}:/opt/stack/ironic:rw
+      # Logs
+      - ${OSFORGE_LOGS:-~/.osforge/logs}:/opt/stack/logs:rw
+      # Cache
+      - ${OSFORGE_CACHE:-~/.osforge/cache}:/opt/stack/cache:rw
+      # Module access
+      - /lib/modules:/lib/modules:ro
+
+    environment:
+      - OSFORGE_JOB=${OSFORGE_JOB:-ironic-tempest-bios-ipmi-autodetect}
+      - IRONIC_DEFAULT_DEPLOY_INTERFACE=autodetect
+      - IRONIC_BOOT_MODE=bios
+
+    ports:
+      - "6385:6385"  # Ironic API
+      - "8080:8080"  # Swift proxy
+
+    tmpfs:
+      - /run
+      - /tmp
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+
+    command: /usr/sbin/init
+
+    networks:
+      - osforge-net
+
+networks:
+  osforge-net:
+    driver: bridge

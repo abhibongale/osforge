@@ -1,0 +1,61 @@
+name: ironic-tempest-bios-ipmi-autodetect
+description: "Test Ironic with BIOS boot mode, IPMI, and auto-detect deployment interface"
+parent: ironic-base
+
+# Container configuration
+container:
+  privileged: true
+  devices:
+    - /dev/kvm
+  capabilities:
+    - SYS_ADMIN
+  memory: 8G
+  cpus: 4
+
+# Volume mounts
+mounts:
+  ironic:
+    source: auto  # Auto-detect or use --ironic-repo
+    target: /opt/stack/ironic
+    type: bind
+
+# Environment variables for this job
+env:
+  IRONIC_DEFAULT_DEPLOY_INTERFACE: autodetect
+  IRONIC_ENABLED_DEPLOY_INTERFACES: "autodetect,bootc,direct"
+  IRONIC_AUTODETECT_DEPLOY_INTERFACES: "bootc,direct"
+  IRONIC_DEFAULT_RESCUE_INTERFACE: agent
+  IRONIC_ENABLED_RESCUE_INTERFACES: "fake,agent,no-rescue"
+  IRONIC_TEMPEST_WHOLE_DISK_IMAGE: "True"
+  IRONIC_VM_EPHEMERAL_DISK: "0"
+  SWIFT_ENABLE_TEMPURLS: "True"
+  SWIFT_TEMPURL_KEY: secretkey
+  IRONIC_BOOT_MODE: bios
+  IRONIC_VM_COUNT: "1"
+
+# DevStack configuration overrides
+devstack:
+  localrc:
+    IRONIC_TEMPEST_WHOLE_DISK_IMAGE: True
+    IRONIC_VM_EPHEMERAL_DISK: 0
+  services:
+    enabled:
+      - atop
+      - s-account
+      - s-container
+      - s-object
+      - s-proxy
+    disabled: []
+
+# Test execution
+test:
+  framework: tempest
+  regex: test_baremetal_server_ops_wholedisk_image
+  concurrency: 1
+  timeout: 2600
+
+# Resource requirements
+resources:
+  memory: 8G
+  cpus: 4
+  disk: 20G
