@@ -163,29 +163,29 @@ resources:
 
 ## Building the Base Image
 
-**Note:** The base image is not yet built! You'll need to build it first:
+**Critical first step:** Build the base container image before using OSForge.
 
 ```bash
 cd images/base
 
-# Build locally
+# 1. Uncomment DevStack installation in Containerfile
+vim Containerfile
+# Find: # RUN cd /opt/stack/devstack && ./stack.sh
+# Uncomment it (remove the #)
+
+# 2. Build (takes 45-60 minutes!)
 ./build.sh
 
-# Or build with custom tag
-./build.sh dev
+# 3. Test
+podman run --rm -it --privileged --device /dev/kvm \
+  quay.io/osforge/base:latest /bin/bash
 
-# Push to Quay.io (requires login and organization setup)
+# 4. Push to Quay.io (optional)
 podman login quay.io
 podman push quay.io/osforge/base:latest
 ```
 
-### Setting up Quay.io
-
-1. Create account at https://quay.io
-2. Create organization "osforge" (or use your username)
-3. Create public repository "base"
-4. Login: `podman login quay.io`
-5. Push: `podman push quay.io/osforge/base:latest`
+**Full guide:** See `docs/building-base-image.md` for complete instructions, troubleshooting, and optimization tips.
 
 ## Project Status
 
