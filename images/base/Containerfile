@@ -79,6 +79,7 @@ COPY --chmod=755 files/scripts/setup-services.sh /usr/local/bin/
 COPY --chmod=755 files/scripts/setup-vbmc.sh /usr/local/bin/
 COPY --chmod=755 files/scripts/run-tempest.sh /usr/local/bin/
 COPY --chmod=755 files/scripts/health-check.sh /usr/local/bin/
+COPY --chmod=755 files/scripts/checkout-branch.sh /usr/local/bin/
 
 # Copy entrypoint
 COPY --chmod=755 entrypoint.sh /usr/local/bin/osforge-entrypoint.sh

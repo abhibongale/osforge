@@ -81,6 +81,11 @@ cmd_run() {
     local job_name=""
     local ironic_repo=""
     local ipa_repo=""
+    local devstack_repo=""
+    local nova_repo=""
+    local neutron_repo=""
+    local branch=""
+    local devstack_branch=""
     local verbose=false
     local keep=false
     local no_pull=false
@@ -94,6 +99,26 @@ cmd_run() {
                 ;;
             --ipa-repo)
                 ipa_repo="$2"
+                shift 2
+                ;;
+            --devstack-repo)
+                devstack_repo="$2"
+                shift 2
+                ;;
+            --nova-repo)
+                nova_repo="$2"
+                shift 2
+                ;;
+            --neutron-repo)
+                neutron_repo="$2"
+                shift 2
+                ;;
+            --branch)
+                branch="$2"
+                shift 2
+                ;;
+            --devstack-branch)
+                devstack_branch="$2"
                 shift 2
                 ;;
             --verbose)
@@ -137,7 +162,7 @@ cmd_run() {
     fi
 
     # Run the job
-    run_job "$job_name" "$ironic_repo" "$ipa_repo" "$verbose" "$keep" "$no_pull"
+    run_job "$job_name" "$ironic_repo" "$ipa_repo" "$devstack_repo" "$nova_repo" "$neutron_repo" "$branch" "$devstack_branch" "$verbose" "$keep" "$no_pull"
 }
 
 # Command: logs - View logs from last run
@@ -192,11 +217,16 @@ COMMANDS:
     help                Show this help
 
 RUN OPTIONS:
-    --ironic-repo <path>    Path to local Ironic repository
-    --ipa-repo <path>       Path to local Ironic Python Agent repository
-    --verbose               Enable verbose output
-    --keep                  Keep container running after test
-    --no-pull               Don't pull base image before run
+    --ironic-repo <path>       Path to local Ironic repository
+    --ipa-repo <path>          Path to local Ironic Python Agent repository
+    --devstack-repo <path>     Path to local DevStack repository
+    --nova-repo <path>         Path to local Nova repository
+    --neutron-repo <path>      Path to local Neutron repository
+    --branch <branch>          Branch/tag to checkout (applies to all repos)
+    --devstack-branch <branch> Branch/tag for DevStack specifically
+    --verbose                  Enable verbose output
+    --keep                     Keep container running after test
+    --no-pull                  Don't pull base image before run
 
 EXAMPLES:
     # Run job from ironic directory (auto-detects repo)
@@ -205,6 +235,19 @@ EXAMPLES:
 
     # Run with explicit repo path
     osforge run ironic-tempest-bios-ipmi-autodetect --ironic-repo ~/dev/ironic
+
+    # Test stable branch (2026.1)
+    osforge run devstack-platform-rocky-blue-onyx --branch stable/2026.1
+
+    # Test DevStack stable branch with custom repo
+    osforge run devstack-platform-rocky-blue-onyx \
+      --devstack-repo ~/dev/devstack \
+      --devstack-branch stable/2026.1
+
+    # Test specific Nova commit
+    osforge run devstack-platform-rocky-blue-onyx \
+      --nova-repo ~/dev/nova \
+      --branch a1b2c3d
 
     # View logs
     osforge logs

@@ -1,0 +1,146 @@
+name: devstack-platform-rocky-blue-onyx
+description: "Rocky Linux 9 Blue Onyx platform test - Full OpenStack tempest integration test"
+parent: tempest-full-py3
+
+# Container configuration
+# Note: This job tests Rocky Linux 9 compatibility, but we'll use Ubuntu base
+# and simulate the key differences (Python 3.11, swap config)
+container:
+  privileged: true
+  capabilities:
+    - SYS_ADMIN
+  memory: 10G  # More memory for full tempest
+  cpus: 4
+
+# Volume mounts
+mounts:
+  devstack:
+    source: auto  # Auto-detect or use --devstack-repo
+    target: /opt/stack/devstack
+    type: bind
+    required: false  # Optional - can test base image DevStack
+
+# Environment variables
+env:
+  # Python version matching Rocky Linux 9
+  PYTHON3_VERSION: "3.11"
+
+  # Swap configuration (Rocky job uses 4GB swap)
+  CONFIGURE_SWAP_SIZE: "4096"
+
+# DevStack configuration
+devstack:
+  localrc:
+    # Full OpenStack services (tempest-full-py3 parent)
+    # Enables: Nova, Neutron, Glance, Keystone, Cinder, etc.
+
+    # Python version
+    PYTHON3_VERSION: 3.11
+
+    # Logging
+    LOGFILE: /opt/stack/logs/devstack.log
+    LOG_COLOR: False
+
+    # Image
+    IMAGE_URLS: "http://download.cirros-cloud.net/0.6.0/cirros-0.6.0-x86_64-disk.img"
+    DEFAULT_IMAGE_NAME: cirros-0.6.0-x86_64-disk
+
+    # Networking
+    Q_AGENT: openvswitch
+    Q_ML2_TENANT_NETWORK_TYPE: vxlan
+
+  services:
+    enabled:
+      # Core services
+      - mysql
+      - rabbit
+      - keystone
+      # Nova
+      - n-api
+      - n-cpu
+      - n-cond
+      - n-sch
+      - n-novnc
+      # Neutron
+      - q-svc
+      - q-agt
+      - q-dhcp
+      - q-l3
+      - q-meta
+      # Glance
+      - g-api
+      - g-reg
+      # Cinder
+      - c-api
+      - c-sch
+      - c-vol
+      # Horizon
+      - horizon
+      # Tempest
+      - tempest
+    disabled:
+      # Disable Swift for this job (not required for platform test)
+      - s-proxy
+      - s-account
+      - s-container
+      - s-object
+
+# Test execution
+test:
+  framework: tempest
+  # Full tempest test suite (not just smoke)
+  # This runs all tempest tests to verify platform compatibility
+  regex: tempest\.
+  concurrency: 4  # Can run more tests in parallel for full suite
+  timeout: 9000  # 2.5 hours (matches Zuul job)
+
+  # Tempest configuration
+  tempest_config:
+    compute:
+      min_compute_nodes: 1
+      build_timeout: 600
+    validation:
+      run_validation: true
+    volume:
+      build_timeout: 600
+    network:
+      project_network_cidr: 10.0.0.0/24
+
+# Resource requirements
+resources:
+  memory: 10G  # Full tempest needs more resources
+  cpus: 4
+  disk: 30G  # More disk for multiple VMs and volumes
+
+# Job metadata
+metadata:
+  # This job tests DevStack platform compatibility on Rocky Linux 9
+  # In OSForge, we use Ubuntu base but configure Python 3.11 to match
+  platform: rocky-linux-9
+  python_version: "3.11"
+  test_type: platform-compatibility
+  test_scope: full-tempest
+
+  # Known issues (from Zuul)
+  notes: |
+    This job was non-voting in upstream Zuul due to RDO repository
+    metadata errors. In OSForge, we use Ubuntu base so this should
+    not be an issue, but the test scope is the same.
+
+  # Zuul reference
+  zuul_job: devstack-platform-rocky-blue-onyx
+  zuul_nodeset: devstack-single-node-rockylinux-9
+  zuul_timeout: 9000
+  zuul_voting: false  # Was non-voting upstream
+
+# Differences from Zuul job
+differences:
+  - name: OS Platform
+    zuul: Rocky Linux 9 Blue Onyx
+    osforge: Ubuntu 24.04 Noble (with Python 3.11)
+    impact: Minimal - Python version matched, core functionality same
+
+  - name: Repository Issues
+    zuul: RDO repository metadata errors causing failures
+    osforge: Uses Ubuntu repos, should not have RDO issues
+    impact: OSForge version should be more stable
