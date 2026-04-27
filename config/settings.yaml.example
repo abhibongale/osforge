@@ -1,0 +1,70 @@
+# OSForge User Configuration Example
+# Copy this file to ~/.osforge/config.yaml and customize
+
+# Container runtime (podman or docker)
+runtime: podman
+
+# Base image to use
+base_image: quay.io/osforge/base:latest
+
+# Default repository paths
+# These are used when you don't specify --ironic-repo flag
+repos:
+  # Ironic repository location
+  ironic: ~/dev/ironic
+  # Or use absolute path:
+  # ironic: /home/abongale/Projects/openstack/ironic
+  # Or wherever your Gerrit checkout is:
+  # ironic: /home/abongale/gerrit/openstack/ironic
+
+  # Ironic Python Agent (optional)
+  ironic-python-agent: ~/dev/ironic-python-agent
+
+  # Tempest (optional)
+  tempest: ~/dev/tempest
+
+# Logging configuration
+logging:
+  # Log level: DEBUG, INFO, WARN, ERROR
+  level: INFO
+
+  # Keep last N log runs (older ones are deleted on cleanup)
+  keep_logs: 10
+
+  # Output: console, file, both
+  output: both
+
+# Resource limits
+resources:
+  # Memory for container
+  memory: 8G
+
+  # CPU cores
+  cpus: 4
+
+# Network configuration
+network:
+  # Network mode: bridge or host
+  mode: bridge
+
+# Advanced options
+advanced:
+  # Pull base image before every run
+  pull_before_run: false
+
+  # Auto cleanup container after successful run
+  cleanup_after_run: false
+
+  # Persist MySQL data between runs (faster startup but uses disk)
+  persist_mysql: false
+
+# Job-specific overrides (optional)
+jobs:
+  # Override settings for specific jobs
+  ironic-tempest-bios-ipmi-autodetect:
+    resources:
+      memory: 10G  # This job needs more memory
+
+  ironic-tempest-uefi-redfish:
+    repos:
+      ironic: ~/dev/ironic-uefi-branch  # Use different branch
