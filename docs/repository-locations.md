@@ -45,7 +45,7 @@ osforge run ironic-tempest-bios-ipmi-autodetect \
 
 # Absolute path
 osforge run ironic-tempest-bios-ipmi-autodetect \
-  --ironic-repo /home/abongale/Projects/ironic-custom
+  --ironic-repo ~/Projects/ironic-custom
 ```
 
 ---

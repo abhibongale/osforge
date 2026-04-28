@@ -80,7 +80,7 @@ df -h /tmp                 # Build temp files
 ### Step 1: Navigate to Base Image Directory
 
 ```bash
-cd /home/abongale/Workspace/osforge/images/base
+cd ~/osforge/images/base
 ```
 
 ### Step 2: Review the Containerfile
@@ -100,57 +100,51 @@ cat Containerfile
 6. OpenStack repos
 7. Helper scripts
 
-### Step 3: Enable DevStack Installation
+### Step 3: Run the Two-Stage Build
 
-**IMPORTANT**: The Containerfile has DevStack installation commented out by default to allow testing base layers first.
+DevStack requires running services (MySQL, RabbitMQ, etc.) which can't start during a normal container build. We use a two-stage approach:
 
-Open the Containerfile:
-```bash
-vim Containerfile
-```
-
-Find this line (around line 48):
-```dockerfile
-# TODO: Uncomment this after testing the base layers
-# RUN cd /opt/stack/devstack && ./stack.sh
-```
-
-Uncomment it:
-```dockerfile
-# Run DevStack installation (this takes ~30-45 minutes)
-RUN cd /opt/stack/devstack && ./stack.sh
-```
-
-Save and exit.
-
-### Step 4: Run the Build
+**Stage 1**: Build base image with all dependencies
+**Stage 2**: Run DevStack in a privileged container, then commit it
 
 ```bash
-# Build with the build script
+# Two-stage build (recommended)
+./build-with-devstack.sh
+
+# Or for testing just the base layer:
 ./build.sh
-
-# Or manually:
-podman build -t quay.io/osforge/base:latest -f Containerfile .
 ```
+
+The `build-with-devstack.sh` script will:
+1. Build intermediate image with dependencies (~10 min)
+2. Start container with systemd (~10 sec)
+3. Run DevStack inside container (~45-60 min)
+4. Commit container to final image (~2 min)
+5. Clean up intermediate artifacts
 
 **What happens:**
 
 ```
-[1/10] Building base layer (Ubuntu)... (~5 min)
-[2/10] Installing system packages... (~10 min)
-[3/10] Creating stack user... (~1 min)
-[4/10] Cloning DevStack... (~2 min)
-[5/10] Cloning OpenStack repos... (~5 min)
-[6/10] Running DevStack (THIS IS LONG!)... (~30-45 min)
-[7/10] Installing Tempest... (~5 min)
-[8/10] Copying helper scripts... (~1 min)
-[9/10] Configuring systemd... (~2 min)
-[10/10] Finalizing image... (~1 min)
+Stage 1: Building intermediate image
+  [1/8] Building base layer (Ubuntu)... (~3 min)
+  [2/8] Installing system packages... (~8 min)
+  [3/8] Creating stack user... (~10 sec)
+  [4/8] Cloning DevStack... (~2 min)
+  [5/8] Cloning OpenStack repos... (~5 min)
+  [6/8] Copying helper scripts... (~10 sec)
+  [7/8] Configuring systemd... (~20 sec)
+  [8/8] Finalizing intermediate image... (~10 sec)
+  
+Stage 2: Running DevStack in container
+  [1/4] Starting container with systemd... (~10 sec)
+  [2/4] Running stack.sh (THIS IS LONG!)... (~45-60 min)
+  [3/4] Committing container to image... (~2 min)
+  [4/4] Cleaning up... (~10 sec)
 
-Total: ~60-75 minutes
+Total: ~65-80 minutes
 ```
 
-### Step 5: Monitor the Build
+### Step 4: Monitor the Build
 
 The build will show progress. Watch for:
 
@@ -297,7 +291,7 @@ podman tag quay.io/osforge/base:latest \
   quay.io/osforge/base:noble-$(date +%Y%m%d)
 
 # Optional: tag with git commit
-cd /home/abongale/Workspace/osforge
+cd ~/osforge
 GIT_SHA=$(git rev-parse --short HEAD)
 podman tag quay.io/osforge/base:latest \
   quay.io/osforge/base:noble-${GIT_SHA}
@@ -361,12 +355,12 @@ You should rebuild periodically to get latest OpenStack code:
 **How to rebuild:**
 
 ```bash
-cd /home/abongale/Workspace/osforge/images/base
+cd ~/osforge/images/base
 
-# Rebuild without cache (fresh build)
-podman build --no-cache -t quay.io/osforge/base:latest -f Containerfile .
+# Full rebuild with DevStack
+./build-with-devstack.sh
 
-# Or use the build script
+# Or just rebuild the base layer for testing
 ./build.sh
 ```
 
