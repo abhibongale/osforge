@@ -5,7 +5,14 @@ LABEL maintainer="OSForge Contributors"
 LABEL description="OSForge base image with DevStack and Ironic pre-installed"
 LABEL version="0.1.0"
 
+# Prevent services from starting during package installation
+RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && \
+    chmod +x /usr/sbin/policy-rc.d
+
 # Install system dependencies
+# NOTE: Don't install packages with systemd daemons (mysql, rabbitmq, openvswitch, libvirt-daemon, qemu)
+# DevStack will install them when systemd is running, ensuring proper daemon initialization
+# libvirt-dev is safe (just headers, no daemon) and needed for virtualbmc
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         git \
@@ -15,13 +22,9 @@ RUN apt-get update && \
         sudo \
         systemd \
         systemd-sysv \
-        mysql-server \
-        rabbitmq-server \
-        openvswitch-switch \
-        libvirt-daemon-system \
-        libvirt-clients \
-        qemu-kvm \
-        qemu-utils \
+        lsb-release \
+        libvirt-dev \
+        pkg-config \
         bridge-utils \
         iproute2 \
         iptables \
@@ -51,9 +54,20 @@ RUN git clone https://opendev.org/openstack/devstack.git /opt/stack/devstack
 # Copy DevStack configuration
 COPY --chown=stack:stack devstack-local.conf /opt/stack/devstack/local.conf
 
-# Run DevStack installation (this takes ~30-45 minutes)
-# TODO: Uncomment this after testing the base layers
-# RUN cd /opt/stack/devstack && ./stack.sh
+# Pre-create password file to prevent interactive prompts
+RUN echo 'DATABASE_PASSWORD=secret' > /opt/stack/devstack/.localrc.password && \
+    echo 'RABBIT_PASSWORD=secret' >> /opt/stack/devstack/.localrc.password && \
+    echo 'SERVICE_PASSWORD=secret' >> /opt/stack/devstack/.localrc.password && \
+    echo 'ADMIN_PASSWORD=secret' >> /opt/stack/devstack/.localrc.password && \
+    echo 'SWIFT_HASH=66a3d6b56c1f479c8b4e70ab5c2000f5' >> /opt/stack/devstack/.localrc.password && \
+    echo 'SWIFT_TEMPURL_KEY=b3968d0207b54ece87cccc06515a89d4' >> /opt/stack/devstack/.localrc.password && \
+    chown stack:stack /opt/stack/devstack/.localrc.password
+
+# Patch DevStack to skip KSM configuration (not available in containers)
+RUN sed -i 's/function configure_ksm {/function configure_ksm {\n    return 0/' /opt/stack/devstack/lib/host
+
+# NOTE: DevStack installation is done in a running container via build-devstack.sh
+# because it requires systemd services to be running, which can't happen during build
 
 # Clone required repositories
 RUN git clone https://opendev.org/openstack/ironic.git /opt/stack/ironic && \

@@ -1,5 +1,6 @@
 #!/bin/bash
-# Build OSForge base image
+# Build OSForge base image (dependencies only, without DevStack)
+# For full build with DevStack, use build-with-devstack.sh
 
 set -euo pipefail
 
@@ -8,7 +9,10 @@ IMAGE_NAME="quay.io/osforge/base"
 TAG="${1:-latest}"
 FULL_IMAGE="${IMAGE_NAME}:${TAG}"
 
-echo "===> Building OSForge base image: $FULL_IMAGE"
+echo "===> Building OSForge base image (without DevStack): $FULL_IMAGE"
+echo "NOTE: This builds only the base dependencies."
+echo "For a complete build with DevStack, run: ./build-with-devstack.sh"
+echo ""
 
 # Build image
 podman build -t "$FULL_IMAGE" -f Containerfile .
