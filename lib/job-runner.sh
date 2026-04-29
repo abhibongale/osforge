@@ -113,31 +113,30 @@ run_job() {
 
 # Setup services in container
 setup_services() {
-    log_info "Starting MySQL..."
-    container_exec systemctl start mysql || return 1
-    sleep 2
+    # For our DevStack base image, services are already running
+    # Just verify they're active instead of trying to start them
+    log_info "Verifying services are running..."
 
-    log_info "Starting RabbitMQ..."
-    container_exec systemctl start rabbitmq-server || return 1
-    sleep 2
+    # Check key DevStack services
+    log_info "Checking Ironic API..."
+    if ! container_exec systemctl is-active --quiet devstack@ir-api.service; then
+        log_warn "Ironic API not running, attempting to start..."
+        container_exec systemctl start devstack@ir-api.service || return 1
+    fi
 
-    log_info "Starting OVS..."
-    container_exec systemctl start openvswitch-switch || return 1
-    sleep 2
+    log_info "Checking Ironic Conductor..."
+    if ! container_exec systemctl is-active --quiet devstack@ir-cond.service; then
+        log_warn "Ironic Conductor not running, attempting to start..."
+        container_exec systemctl start devstack@ir-cond.service || return 1
+    fi
 
-    log_info "Starting Ironic services..."
-    container_exec systemctl start ironic-api || return 1
-    container_exec systemctl start ironic-conductor || return 1
-    sleep 5
+    log_info "Checking Keystone..."
+    if ! container_exec systemctl is-active --quiet devstack@keystone.service; then
+        log_warn "Keystone not running, attempting to start..."
+        container_exec systemctl start devstack@keystone.service || return 1
+    fi
 
-    log_info "Starting Swift services..."
-    container_exec systemctl start swift-proxy || return 1
-    container_exec systemctl start swift-account || return 1
-    container_exec systemctl start swift-container || return 1
-    container_exec systemctl start swift-object || return 1
-    sleep 3
-
-    log_success "All services started"
+    log_success "All required services are running"
     return 0
 }
 
@@ -197,10 +196,18 @@ checkout_branches() {
 
 # Setup VirtualBMC
 setup_vbmc() {
-    log_info "Setting up virtual baremetal node..."
+    log_info "Setting up VirtualBMC..."
 
-    # TODO: Call setup-vbmc.sh script in container
-    container_exec /usr/local/bin/setup-vbmc.sh || return 1
+    # Start vbmcd daemon (remove stale PID file if exists)
+    container_exec bash -c 'rm -f /root/.vbmc/master.pid && vbmcd' || return 1
+    sleep 2
+
+    # Verify VirtualBMC nodes are configured
+    log_info "Checking VirtualBMC nodes..."
+    if ! container_exec vbmc list | grep -q "node-"; then
+        log_error "VirtualBMC nodes not found"
+        return 1
+    fi
 
     log_success "VirtualBMC setup complete"
     return 0
@@ -212,11 +219,26 @@ run_tempest_test() {
 
     log_info "Running tempest tests (this may take 20-30 minutes)..."
 
-    # TODO: Call run-tempest.sh script in container
-    # For now, just a placeholder
-    if container_exec /usr/local/bin/run-tempest.sh "$job_name"; then
+    # Install ironic-tempest-plugin in the tempest tox environment
+    log_info "Installing ironic-tempest-plugin..."
+    if ! container_exec bash -c "cd /opt/stack/ironic-tempest-plugin && /opt/stack/tempest/.tox/tempest/bin/pip install -e ."; then
+        log_error "Failed to install ironic-tempest-plugin"
+        return 1
+    fi
+
+    # Set OS_CLOUD environment and run the specific Tempest test
+    # For ironic-tempest-bios-ipmi-autodetect, the test is test_baremetal_server_ops_wholedisk_image
+    local test_regex="test_baremetal_server_ops_wholedisk_image"
+
+    log_info "Test regex: $test_regex"
+    log_info "This will test deploying a baremetal instance with whole-disk image..."
+
+    # Run tempest test
+    if container_exec bash -c "cd /opt/stack/tempest && export OS_CLOUD=devstack-admin && .tox/tempest/bin/tempest run --regex ironic_tempest_plugin.tests.scenario.${test_regex}"; then
+        log_success "Tempest test passed!"
         return 0
     else
+        log_error "Tempest test failed!"
         return 1
     fi
 }

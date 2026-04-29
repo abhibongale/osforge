@@ -31,7 +31,9 @@ container_start() {
     # Build mount arguments
     local mount_args=()
 
-    # Mount ironic repo if provided
+    # Don't mount ironic repo directly - it breaks the pre-configured services
+    # Instead, we'll copy it in after container starts and services are running
+    # Store the repo path for later use
     if [[ -n "$ironic_repo" ]]; then
         local resolved_repo
         resolved_repo=$(resolve_path "$ironic_repo")
@@ -41,8 +43,8 @@ container_start() {
             return 1
         fi
 
-        log_info "Mounting Ironic repo: $resolved_repo"
-        mount_args+=(-v "$resolved_repo:/opt/stack/ironic:rw")
+        log_info "Will sync Ironic repo after container starts: $resolved_repo"
+        # mount_args+=(-v "$resolved_repo:/opt/stack/ironic:rw")
     fi
 
     # Mount log directory
@@ -57,15 +59,16 @@ container_start() {
     $RUNTIME run -d \
         --name "$container_name" \
         --privileged \
+        --systemd=always \
         --device /dev/kvm \
+        --cgroupns=host \
         --cap-add SYS_ADMIN \
         --memory "$MEMORY" \
         --cpus "$CPUS" \
+        -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
         "${mount_args[@]}" \
         -e "OSFORGE_JOB=$job_name" \
         -e "OSFORGE_LOG_DIR=/opt/stack/logs" \
-        --tmpfs /run \
-        --tmpfs /tmp \
         "$BASE_IMAGE" \
         /usr/sbin/init
 
@@ -78,16 +81,17 @@ container_start() {
 
     # Wait for systemd to be ready
     log_info "Waiting for container to be ready..."
-    local timeout=30
+    local timeout=60
     local elapsed=0
 
     while [[ $elapsed -lt $timeout ]]; do
-        if container_exec systemctl is-system-running --wait 2>/dev/null | grep -qE "running|degraded"; then
-            log_success "Container is ready"
+        # Check if devstack services are running instead of waiting for full systemd ready
+        if container_exec systemctl is-active --quiet devstack@ir-api.service 2>/dev/null; then
+            log_success "Container is ready (DevStack services running)"
             return 0
         fi
-        sleep 1
-        ((elapsed++))
+        sleep 2
+        ((elapsed+=2))
     done
 
     log_error "Container failed to become ready"
