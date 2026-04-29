@@ -130,6 +130,15 @@ setup_services() {
     fi
     log_success "RabbitMQ started"
 
+    # Start Apache (HTTP proxy for Keystone and other OpenStack APIs)
+    log_info "Starting Apache..."
+    if ! container_exec bash -c "systemctl start apache2 && sleep 3 && systemctl is-active --quiet apache2"; then
+        log_error "Apache failed to start"
+        container_exec systemctl status apache2 --no-pager || true
+        return 1
+    fi
+    log_success "Apache started"
+
     # Start all DevStack services
     log_info "Starting DevStack services (this may take 30-60 seconds)..."
     if ! container_exec systemctl start --all 'devstack@*'; then
@@ -153,6 +162,11 @@ setup_services() {
 
     if ! container_exec systemctl is-active --quiet devstack@keystone.service; then
         log_error "Keystone not running"
+        services_ok=false
+    fi
+
+    if ! container_exec systemctl is-active --quiet apache2; then
+        log_error "Apache not running"
         services_ok=false
     fi
 

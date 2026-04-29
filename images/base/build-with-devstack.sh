@@ -73,6 +73,14 @@ if podman exec -u stack "$CONTAINER_NAME" bash -c 'cd /opt/stack/devstack && ./s
     echo "===> DevStack installation successful!"
     echo ""
 
+    # Stop all services before committing (Option A: services stopped in base image, started at runtime)
+    echo "===> Stopping services before commit..."
+    podman exec "$CONTAINER_NAME" systemctl stop 'devstack@*' || true
+    podman exec "$CONTAINER_NAME" systemctl stop apache2 || true
+    podman exec "$CONTAINER_NAME" systemctl stop rabbitmq-server || true
+    podman exec "$CONTAINER_NAME" systemctl stop mysql || true
+    echo "===> Services stopped"
+
     # Commit the container to final image
     echo "===> Committing container to image: $FINAL_IMAGE"
     podman commit "$CONTAINER_NAME" "$FINAL_IMAGE"
