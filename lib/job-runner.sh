@@ -113,30 +113,55 @@ run_job() {
 
 # Setup services in container
 setup_services() {
-    # For our DevStack base image, services are already running
-    # Just verify they're active instead of trying to start them
-    log_info "Verifying services are running..."
+    # Start database and message queue first
+    log_info "Starting MySQL..."
+    if ! container_exec bash -c "systemctl start mysql && sleep 3 && systemctl is-active --quiet mysql"; then
+        log_error "MySQL failed to start"
+        container_exec systemctl status mysql --no-pager || true
+        return 1
+    fi
+    log_success "MySQL started"
 
-    # Check key DevStack services
-    log_info "Checking Ironic API..."
+    log_info "Starting RabbitMQ..."
+    if ! container_exec bash -c "systemctl start rabbitmq-server && sleep 5 && systemctl is-active --quiet rabbitmq-server"; then
+        log_error "RabbitMQ failed to start"
+        container_exec systemctl status rabbitmq-server --no-pager || true
+        return 1
+    fi
+    log_success "RabbitMQ started"
+
+    # Start all DevStack services
+    log_info "Starting DevStack services (this may take 30-60 seconds)..."
+    if ! container_exec systemctl start --all 'devstack@*'; then
+        log_warn "Some DevStack services may not have started"
+    fi
+    sleep 15
+
+    # Verify key services are running
+    log_info "Verifying key services..."
+    local services_ok=true
+
     if ! container_exec systemctl is-active --quiet devstack@ir-api.service; then
-        log_warn "Ironic API not running, attempting to start..."
-        container_exec systemctl start devstack@ir-api.service || return 1
+        log_error "Ironic API not running"
+        services_ok=false
     fi
 
-    log_info "Checking Ironic Conductor..."
     if ! container_exec systemctl is-active --quiet devstack@ir-cond.service; then
-        log_warn "Ironic Conductor not running, attempting to start..."
-        container_exec systemctl start devstack@ir-cond.service || return 1
+        log_error "Ironic Conductor not running"
+        services_ok=false
     fi
 
-    log_info "Checking Keystone..."
     if ! container_exec systemctl is-active --quiet devstack@keystone.service; then
-        log_warn "Keystone not running, attempting to start..."
-        container_exec systemctl start devstack@keystone.service || return 1
+        log_error "Keystone not running"
+        services_ok=false
     fi
 
-    log_success "All required services are running"
+    if [[ "$services_ok" != "true" ]]; then
+        log_error "Some services failed to start"
+        return 1
+    fi
+
+    log_success "All services started successfully"
     return 0
 }
 
@@ -196,18 +221,10 @@ checkout_branches() {
 
 # Setup VirtualBMC
 setup_vbmc() {
-    log_info "Setting up VirtualBMC..."
+    log_info "Setting up virtual baremetal node..."
 
-    # Start vbmcd daemon (remove stale PID file if exists)
-    container_exec bash -c 'rm -f /root/.vbmc/master.pid && vbmcd' || return 1
-    sleep 2
-
-    # Verify VirtualBMC nodes are configured
-    log_info "Checking VirtualBMC nodes..."
-    if ! container_exec vbmc list | grep -q "node-"; then
-        log_error "VirtualBMC nodes not found"
-        return 1
-    fi
+    # TODO: Call setup-vbmc.sh script in container
+    container_exec /usr/local/bin/setup-vbmc.sh || return 1
 
     log_success "VirtualBMC setup complete"
     return 0
@@ -219,26 +236,11 @@ run_tempest_test() {
 
     log_info "Running tempest tests (this may take 20-30 minutes)..."
 
-    # Install ironic-tempest-plugin in the tempest tox environment
-    log_info "Installing ironic-tempest-plugin..."
-    if ! container_exec bash -c "cd /opt/stack/ironic-tempest-plugin && /opt/stack/tempest/.tox/tempest/bin/pip install -e ."; then
-        log_error "Failed to install ironic-tempest-plugin"
-        return 1
-    fi
-
-    # Set OS_CLOUD environment and run the specific Tempest test
-    # For ironic-tempest-bios-ipmi-autodetect, the test is test_baremetal_server_ops_wholedisk_image
-    local test_regex="test_baremetal_server_ops_wholedisk_image"
-
-    log_info "Test regex: $test_regex"
-    log_info "This will test deploying a baremetal instance with whole-disk image..."
-
-    # Run tempest test
-    if container_exec bash -c "cd /opt/stack/tempest && export OS_CLOUD=devstack-admin && .tox/tempest/bin/tempest run --regex ironic_tempest_plugin.tests.scenario.${test_regex}"; then
-        log_success "Tempest test passed!"
+    # TODO: Call run-tempest.sh script in container
+    # For now, just a placeholder
+    if container_exec /usr/local/bin/run-tempest.sh "$job_name"; then
         return 0
     else
-        log_error "Tempest test failed!"
         return 1
     fi
 }

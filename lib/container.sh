@@ -31,9 +31,7 @@ container_start() {
     # Build mount arguments
     local mount_args=()
 
-    # Don't mount ironic repo directly - it breaks the pre-configured services
-    # Instead, we'll copy it in after container starts and services are running
-    # Store the repo path for later use
+    # Mount ironic repo if provided
     if [[ -n "$ironic_repo" ]]; then
         local resolved_repo
         resolved_repo=$(resolve_path "$ironic_repo")
@@ -43,8 +41,8 @@ container_start() {
             return 1
         fi
 
-        log_info "Will sync Ironic repo after container starts: $resolved_repo"
-        # mount_args+=(-v "$resolved_repo:/opt/stack/ironic:rw")
+        log_info "Mounting Ironic repo: $resolved_repo"
+        mount_args+=(-v "$resolved_repo:/opt/stack/ironic:rw")
     fi
 
     # Mount log directory
@@ -80,14 +78,14 @@ container_start() {
     log_success "Container started: $container_name"
 
     # Wait for systemd to be ready
-    log_info "Waiting for container to be ready..."
+    log_info "Waiting for systemd to initialize..."
     local timeout=60
     local elapsed=0
 
     while [[ $elapsed -lt $timeout ]]; do
-        # Check if devstack services are running instead of waiting for full systemd ready
-        if container_exec systemctl is-active --quiet devstack@ir-api.service 2>/dev/null; then
-            log_success "Container is ready (DevStack services running)"
+        # Check if systemd is operational (can list units)
+        if container_exec systemctl list-units --no-pager &>/dev/null; then
+            log_success "Container is ready (systemd operational)"
             return 0
         fi
         sleep 2
