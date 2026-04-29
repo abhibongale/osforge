@@ -223,8 +223,29 @@ checkout_branches() {
 setup_vbmc() {
     log_info "Setting up virtual baremetal node..."
 
-    # TODO: Call setup-vbmc.sh script in container
-    container_exec /usr/local/bin/setup-vbmc.sh || return 1
+    # Load job configuration and set environment variables
+    local job_file="$OSFORGE_CONFIG/jobs/${job_name}.yaml"
+
+    # Extract environment variables from job config
+    local env_vars=""
+    if grep -q "^env:" "$job_file"; then
+        # Read env section from YAML and convert to bash exports
+        while IFS=: read -r key value; do
+            # Skip the 'env:' line and empty lines
+            if [[ "$key" == "env" ]] || [[ -z "$key" ]]; then
+                continue
+            fi
+            # Trim whitespace and quotes
+            key=$(echo "$key" | xargs)
+            value=$(echo "$value" | xargs | sed 's/"//g' | sed "s/'//g")
+            if [[ -n "$key" ]] && [[ -n "$value" ]]; then
+                env_vars="$env_vars -e ${key}=${value}"
+            fi
+        done < <(sed -n '/^env:/,/^[a-z]/p' "$job_file" | grep -v "^#" | head -n -1)
+    fi
+
+    # Call setup-vbmc.sh script in container with environment variables
+    container_exec bash -c "export IRONIC_VM_COUNT=${IRONIC_VM_COUNT:-1} && /usr/local/bin/setup-vbmc.sh" || return 1
 
     log_success "VirtualBMC setup complete"
     return 0
@@ -236,9 +257,25 @@ run_tempest_test() {
 
     log_info "Running tempest tests (this may take 20-30 minutes)..."
 
-    # TODO: Call run-tempest.sh script in container
-    # For now, just a placeholder
-    if container_exec /usr/local/bin/run-tempest.sh "$job_name"; then
+    # Load job configuration
+    local job_file="$OSFORGE_CONFIG/jobs/${job_name}.yaml"
+
+    # Extract test configuration from job config
+    local test_regex=$(yaml_get "$job_file" "test.regex")
+    local test_concurrency=$(yaml_get "$job_file" "test.concurrency")
+    local test_timeout=$(yaml_get "$job_file" "test.timeout")
+
+    # Set defaults if not found
+    test_regex=${test_regex:-"ironic_tempest_plugin.tests.scenario"}
+    test_concurrency=${test_concurrency:-1}
+    test_timeout=${test_timeout:-2600}
+
+    log_debug "Test regex: $test_regex"
+    log_debug "Test concurrency: $test_concurrency"
+    log_debug "Test timeout: $test_timeout"
+
+    # Call run-tempest.sh script in container with configuration
+    if container_exec bash -c "export TEST_REGEX='${test_regex}' TEST_CONCURRENCY='${test_concurrency}' TEST_TIMEOUT='${test_timeout}' && /usr/local/bin/run-tempest.sh '$job_name' /opt/stack/logs"; then
         return 0
     else
         return 1
