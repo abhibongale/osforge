@@ -2,17 +2,26 @@
 # Setup VirtualBMC for simulating IPMI
 # This script runs inside the container
 
-set -euo pipefail
+set -eo pipefail
 
 echo "[setup-vbmc] Setting up virtual baremetal node..."
 
-# Source OpenStack credentials
-if [[ -f /opt/stack/devstack/openrc ]]; then
-    source /opt/stack/devstack/openrc admin admin
-else
-    echo "[setup-vbmc] ERROR: OpenStack credentials not found"
-    exit 1
+# Get HOST_IP from DevStack configuration
+if [[ -f /opt/stack/devstack/.stackenv ]]; then
+    source /opt/stack/devstack/.stackenv
 fi
+
+# Set OpenStack credentials directly (avoid DevStack functions issues)
+export OS_AUTH_URL=http://${SERVICE_HOST:-127.0.0.1}/identity
+export OS_PROJECT_NAME=admin
+export OS_USERNAME=admin
+export OS_PASSWORD=secret
+export OS_REGION_NAME=RegionOne
+export OS_IDENTITY_API_VERSION=3
+export OS_USER_DOMAIN_NAME=Default
+export OS_PROJECT_DOMAIN_NAME=Default
+
+echo "[setup-vbmc] Using SERVICE_HOST: ${SERVICE_HOST:-127.0.0.1}"
 
 # Configuration from environment (set by job config)
 IRONIC_VM_COUNT=${IRONIC_VM_COUNT:-1}
@@ -167,8 +176,8 @@ EOF
         --driver-info ipmi_port="$VBMC_PORT" \
         --driver-info ipmi_username=admin \
         --driver-info ipmi_password=password \
-        --driver-info deploy_kernel=http://172.24.4.1/ipa-kernel \
-        --driver-info deploy_ramdisk=http://172.24.4.1/ipa-ramdisk \
+        --driver-info deploy_kernel=http://${SERVICE_HOST}/ipa-kernel \
+        --driver-info deploy_ramdisk=http://${SERVICE_HOST}/ipa-ramdisk \
         --property cpus="$IRONIC_VM_SPECS_CPU" \
         --property memory_mb="$IRONIC_VM_SPECS_RAM" \
         --property local_gb="$IRONIC_VM_SPECS_DISK" \

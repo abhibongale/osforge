@@ -2,20 +2,29 @@
 # Run Tempest tests
 # This script runs inside the container
 
-set -euo pipefail
+set -eo pipefail
 
 JOB_NAME="${1:-unknown}"
 LOG_DIR="${2:-/opt/stack/logs}"
 
 echo "[run-tempest] Running tempest test for job: $JOB_NAME"
 
-# Source OpenStack credentials
-if [[ -f /opt/stack/devstack/openrc ]]; then
-    source /opt/stack/devstack/openrc admin admin
-else
-    echo "[run-tempest] ERROR: OpenStack credentials not found"
-    exit 1
+# Get HOST_IP from DevStack configuration
+if [[ -f /opt/stack/devstack/.stackenv ]]; then
+    source /opt/stack/devstack/.stackenv
 fi
+
+# Set OpenStack credentials directly (avoid DevStack functions issues)
+export OS_AUTH_URL=http://${SERVICE_HOST:-127.0.0.1}/identity
+export OS_PROJECT_NAME=admin
+export OS_USERNAME=admin
+export OS_PASSWORD=secret
+export OS_REGION_NAME=RegionOne
+export OS_IDENTITY_API_VERSION=3
+export OS_USER_DOMAIN_NAME=Default
+export OS_PROJECT_DOMAIN_NAME=Default
+
+echo "[run-tempest] Using SERVICE_HOST: ${SERVICE_HOST:-127.0.0.1}"
 
 # Change to tempest directory
 cd /opt/stack/tempest || {
@@ -56,8 +65,8 @@ admin_project_name = admin
 admin_domain_name = Default
 
 [identity]
-uri = http://172.24.4.1/identity
-uri_v3 = http://172.24.4.1/identity/v3
+uri = http://${SERVICE_HOST}/identity
+uri_v3 = http://${SERVICE_HOST}/identity/v3
 auth_version = v3
 region = RegionOne
 v3_endpoint_type = public
