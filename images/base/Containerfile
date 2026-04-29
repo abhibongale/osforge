@@ -77,6 +77,12 @@ RUN git clone https://opendev.org/openstack/ironic.git /opt/stack/ironic && \
     git clone https://opendev.org/openstack/tempest.git /opt/stack/tempest && \
     git clone https://opendev.org/openstack/diskimage-builder.git /opt/stack/diskimage-builder
 
+# Patch Ironic devstack lib to skip TFTP kernel module checks in containers
+# These netfilter modules (nf_conntrack_tftp, nf_nat_tftp) are not needed in container environments
+# Replace the die_if_module_not_loaded calls with a no-op comment to avoid syntax errors
+RUN sed -i 's/die_if_module_not_loaded nf_conntrack_tftp/: # Skip nf_conntrack_tftp check in container/' /opt/stack/ironic/devstack/lib/ironic && \
+    sed -i 's/die_if_module_not_loaded nf_nat_tftp/: # Skip nf_nat_tftp check in container/' /opt/stack/ironic/devstack/lib/ironic
+
 # Install tempest and plugins
 # TODO: Install tempest after DevStack runs
 # RUN cd /opt/stack/tempest && pip3 install -e .
