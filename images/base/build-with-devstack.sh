@@ -53,6 +53,17 @@ fi
 echo "Removing policy-rc.d to allow service starts..."
 podman exec "$CONTAINER_NAME" rm -f /usr/sbin/policy-rc.d
 
+# Patch OVS kernel module loader to skip modprobe in containers
+# This allows OVS to work in userspace mode without requiring host kernel modules
+echo "Patching OVS to skip kernel module loading..."
+podman exec "$CONTAINER_NAME" bash -c 'if [ -f /usr/share/openvswitch/scripts/ovs-kmod-ctl ]; then sed -i "s/test -e \/sys\/module\/openvswitch && return 0/return 0  # Skip kernel module loading in container/" /usr/share/openvswitch/scripts/ovs-kmod-ctl; fi'
+
+# Start VirtualBMC daemon
+# VirtualBMC provides IPMI simulation for virtual baremetal nodes
+echo "Starting VirtualBMC daemon..."
+podman exec "$CONTAINER_NAME" bash -c 'mkdir -p /root/.vbmc && vbmcd'
+sleep 2
+
 # Run DevStack installation
 echo "Running stack.sh (this takes 45-60 minutes)..."
 echo ""
