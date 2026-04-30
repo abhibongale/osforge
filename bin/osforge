@@ -24,6 +24,8 @@ source "$OSFORGE_LIB/logging.sh"
 source "$OSFORGE_LIB/container.sh"
 # shellcheck source=lib/job-runner.sh
 source "$OSFORGE_LIB/job-runner.sh"
+# shellcheck source=lib/image-builder.sh
+source "$OSFORGE_LIB/image-builder.sh"
 
 # Main command dispatcher
 main() {
@@ -57,6 +59,10 @@ main() {
         clean)
             shift
             cmd_clean "$@"
+            ;;
+        build)
+            shift
+            cmd_build "$@"
             ;;
         list-jobs|list)
             shift
@@ -198,6 +204,172 @@ cmd_list_jobs() {
     list_available_jobs
 }
 
+# Command: build - Build base images
+cmd_build() {
+    local build_type=""
+    local tag="latest"
+    local push=false
+    local no_cache=false
+    local status_only=false
+    local validate_only=false
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --deps)
+                if [[ -n "$build_type" ]]; then
+                    log_error "Cannot specify both --deps and --full"
+                    exit 1
+                fi
+                build_type="deps"
+                shift
+                ;;
+            --full)
+                if [[ -n "$build_type" ]]; then
+                    log_error "Cannot specify both --deps and --full"
+                    exit 1
+                fi
+                build_type="full"
+                shift
+                ;;
+            --tag)
+                tag="$2"
+                shift 2
+                ;;
+            --push)
+                push=true
+                shift
+                ;;
+            --no-cache)
+                no_cache=true
+                shift
+                ;;
+            --status)
+                status_only=true
+                shift
+                ;;
+            --validate)
+                validate_only=true
+                shift
+                ;;
+            -*)
+                log_error "Unknown option: $1"
+                echo "Usage: osforge build <--deps|--full> [--tag TAG] [--push] [--no-cache]"
+                echo "       osforge build <--status|--validate> [--tag TAG]"
+                exit 1
+                ;;
+            *)
+                log_error "Unexpected argument: $1"
+                echo "Usage: osforge build <--deps|--full> [--tag TAG] [--push] [--no-cache]"
+                echo "       osforge build <--status|--validate> [--tag TAG]"
+                exit 1
+                ;;
+        esac
+    done
+
+    # Show status only if requested
+    if [[ "$status_only" == "true" ]]; then
+        show_build_status
+        return 0
+    fi
+
+    # Validate image only if requested
+    if [[ "$validate_only" == "true" ]]; then
+        validate_image "$tag"
+        return $?
+    fi
+
+    # Require build type
+    if [[ -z "$build_type" ]]; then
+        log_error "Build type required: specify --deps or --full"
+        echo ""
+        echo "Usage: osforge build <--deps|--full> [options]"
+        echo ""
+        echo "Build types:"
+        echo "  --deps    Build base image with dependencies only (~10-15 min)"
+        echo "  --full    Build complete image with DevStack (~45-60 min)"
+        echo ""
+        echo "Options:"
+        echo "  --tag TAG      Custom tag for the image (default: latest)"
+        echo "  --push         Push to Quay.io after successful build"
+        echo "  --no-cache     Force rebuild without using cache"
+        echo ""
+        echo "Utilities:"
+        echo "  osforge build --status      Show current build status"
+        echo "  osforge build --validate    Validate an existing image"
+        exit 1
+    fi
+
+    # Check build requirements
+    if ! check_build_requirements; then
+        log_error "Build requirements not met. Fix the issues above and try again."
+        exit 1
+    fi
+
+    echo ""
+    log_info "Build configuration:"
+    echo "  Type: $(if [[ "$build_type" == "full" ]]; then echo "Full (with DevStack)"; else echo "Dependencies only"; fi)"
+    echo "  Tag: $tag"
+    echo "  Push: $push"
+    echo "  No cache: $no_cache"
+    echo ""
+
+    # Confirm before starting (especially for full build)
+    if [[ "$build_type" == "full" ]]; then
+        log_warn "Full build takes 45-60 minutes and requires significant resources."
+        read -p "Continue? [y/N] " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            log_info "Build cancelled."
+            exit 0
+        fi
+    fi
+
+    # Build image
+    if [[ "$build_type" == "full" ]]; then
+        if ! build_full_image "$tag" "$no_cache"; then
+            exit 1
+        fi
+    else
+        if ! build_base_image "$tag" "$no_cache"; then
+            exit 1
+        fi
+    fi
+
+    # Validate if full build
+    if [[ "$build_type" == "full" ]]; then
+        echo ""
+        log_info "Validating built image..."
+        if ! validate_image "$tag"; then
+            log_warn "Image validation failed, but image was built."
+        fi
+    fi
+
+    # Push to Quay.io if requested
+    if [[ "$push" == "true" ]]; then
+        echo ""
+        if ! push_image "$tag"; then
+            log_error "Push failed, but image was built successfully."
+            exit 1
+        fi
+    fi
+
+    echo ""
+    log_success "Build complete!"
+    echo ""
+    echo "Next steps:"
+    echo "  # Test the image:"
+    echo "  podman run --rm -it --privileged --device /dev/kvm quay.io/osforge/base:$tag /bin/bash"
+    echo ""
+    if [[ "$push" != "true" ]]; then
+        echo "  # Push to Quay.io:"
+        echo "  osforge build --$build_type --tag $tag --push"
+        echo ""
+    fi
+    echo "  # Use the image:"
+    echo "  osforge run ironic-tempest-bios-ipmi-autodetect"
+}
+
 # Command: help - Show help
 cmd_help() {
     cat << 'EOF'
@@ -208,6 +380,7 @@ USAGE:
 
 COMMANDS:
     run <job-name>      Run a specific Zuul job
+    build [options]     Build OSForge base container images
     logs [service]      View logs from last run
     shell               Open interactive shell in container
     status              Show status of running job
@@ -229,6 +402,15 @@ RUN OPTIONS:
     --keep                     Keep container running after test
     --no-pull                  Don't pull base image before run
 
+BUILD OPTIONS:
+    --deps                     Build base image with dependencies only (~10-15 min)
+    --full                     Build complete image with DevStack (~45-60 min)
+    --tag <tag>                Custom tag for the image (default: latest)
+    --push                     Push to Quay.io after successful build
+    --no-cache                 Force rebuild without using cache
+    --status                   Show current build status
+    --validate                 Validate an existing image
+
 EXAMPLES:
     # Run job from ironic directory (auto-detects repo)
     cd ~/dev/ironic
@@ -249,6 +431,24 @@ EXAMPLES:
     osforge run devstack-platform-rocky-blue-onyx \
       --nova-repo ~/dev/nova \
       --branch a1b2c3d
+
+    # Build base image (dependencies only)
+    osforge build --deps
+
+    # Build full image with DevStack (45-60 min)
+    osforge build --full
+
+    # Build and push to Quay.io
+    osforge build --full --push
+
+    # Build with custom tag
+    osforge build --full --tag noble-20260430
+
+    # Check build status
+    osforge build --status
+
+    # Validate built image
+    osforge build --validate
 
     # View logs
     osforge logs
