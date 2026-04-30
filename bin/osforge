@@ -209,6 +209,7 @@ cmd_build() {
     local build_type=""
     local tag="latest"
     local push=false
+    local push_only=false
     local no_cache=false
     local status_only=false
     local validate_only=false
@@ -240,6 +241,10 @@ cmd_build() {
                 push=true
                 shift
                 ;;
+            --push-only)
+                push_only=true
+                shift
+                ;;
             --no-cache)
                 no_cache=true
                 shift
@@ -255,13 +260,13 @@ cmd_build() {
             -*)
                 log_error "Unknown option: $1"
                 echo "Usage: osforge build <--deps|--full> [--tag TAG] [--push] [--no-cache]"
-                echo "       osforge build <--status|--validate> [--tag TAG]"
+                echo "       osforge build <--status|--validate|--push-only> [--tag TAG]"
                 exit 1
                 ;;
             *)
                 log_error "Unexpected argument: $1"
                 echo "Usage: osforge build <--deps|--full> [--tag TAG] [--push] [--no-cache]"
-                echo "       osforge build <--status|--validate> [--tag TAG]"
+                echo "       osforge build <--status|--validate|--push-only> [--tag TAG]"
                 exit 1
                 ;;
         esac
@@ -276,6 +281,12 @@ cmd_build() {
     # Validate image only if requested
     if [[ "$validate_only" == "true" ]]; then
         validate_image "$tag"
+        return $?
+    fi
+
+    # Push only if requested
+    if [[ "$push_only" == "true" ]]; then
+        push_image "$tag"
         return $?
     fi
 
@@ -295,8 +306,9 @@ cmd_build() {
         echo "  --no-cache     Force rebuild without using cache"
         echo ""
         echo "Utilities:"
-        echo "  osforge build --status      Show current build status"
-        echo "  osforge build --validate    Validate an existing image"
+        echo "  osforge build --status       Show current build status"
+        echo "  osforge build --validate     Validate an existing image"
+        echo "  osforge build --push-only    Push existing image to Quay.io"
         exit 1
     fi
 
@@ -407,6 +419,7 @@ BUILD OPTIONS:
     --full                     Build complete image with DevStack (~45-60 min)
     --tag <tag>                Custom tag for the image (default: latest)
     --push                     Push to Quay.io after successful build
+    --push-only                Push existing image to Quay.io (no build)
     --no-cache                 Force rebuild without using cache
     --status                   Show current build status
     --validate                 Validate an existing image
@@ -443,6 +456,9 @@ EXAMPLES:
 
     # Build with custom tag
     osforge build --full --tag noble-20260430
+
+    # Push existing image without building
+    osforge build --push-only --tag alpha
 
     # Check build status
     osforge build --status

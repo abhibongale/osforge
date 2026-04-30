@@ -200,6 +200,24 @@ test_build_with_no_cache() {
     fi
 }
 
+# Test: osforge build --push-only validates and attempts push
+test_build_push_only() {
+    run_test
+    log_test "osforge build --push-only works without build type"
+
+    # This will fail because image doesn't exist, but should accept the args
+    output=$(osforge build --push-only --tag test-image 2>&1 || true)
+
+    if echo "$output" | grep -q "Pushing image to Quay.io"; then
+        log_pass
+        return 0
+    else
+        log_fail "Should attempt to push image"
+        echo "Got: $output"
+        return 1
+    fi
+}
+
 # Test: osforge help shows build command
 test_help_includes_build() {
     run_test
@@ -226,6 +244,11 @@ test_help_includes_build() {
 
     if ! echo "$output" | grep -q "\-\-full"; then
         log_fail "Help should document --full flag"
+        ((errors++))
+    fi
+
+    if ! echo "$output" | grep -q "\-\-push-only"; then
+        log_fail "Help should document --push-only flag"
         ((errors++))
     fi
 
@@ -263,6 +286,7 @@ main() {
     test_build_deps_with_tag || true
     test_build_full_with_push || true
     test_build_with_no_cache || true
+    test_build_push_only || true
     test_help_includes_build || true
 
     # Summary
