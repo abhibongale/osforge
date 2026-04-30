@@ -48,11 +48,38 @@ fi
 
 # Start VirtualBMC daemon
 echo "[setup-vbmc] Starting VirtualBMC daemon..."
-if pgrep -f vbmcd > /dev/null; then
-    echo "[setup-vbmc] VirtualBMC daemon already running"
-else
-    vbmcd --foreground &
-    sleep 2
+
+# Clean up any stale VirtualBMC state
+# The master.pid file can prevent daemon from starting
+echo "[setup-vbmc] Cleaning up stale VirtualBMC state..."
+rm -f /root/.vbmc/master.pid
+pkill -9 vbmcd 2>/dev/null || true
+sleep 1
+
+# Start vbmcd in background without --foreground
+# The daemon will fork itself properly
+echo "[setup-vbmc] Starting vbmcd daemon..."
+vbmcd &
+VBMCD_PID=$!
+
+# Wait for vbmcd to be ready (up to 10 seconds)
+echo "[setup-vbmc] Waiting for VirtualBMC daemon to start (PID: $VBMCD_PID)..."
+for i in {1..10}; do
+    if vbmc list &>/dev/null; then
+        echo "[setup-vbmc] VirtualBMC daemon ready"
+        break
+    fi
+    echo "[setup-vbmc]   Waiting... ($i/10)"
+    sleep 1
+done
+
+# Verify daemon is responding
+if ! vbmc list &>/dev/null; then
+    echo "[setup-vbmc] ERROR: VirtualBMC daemon not responding after 10 seconds"
+    echo "[setup-vbmc] Checking for issues..."
+    ls -la /root/.vbmc/ 2>/dev/null || true
+    ps aux | grep vbmc || true
+    exit 1
 fi
 
 # Create virtual baremetal nodes
