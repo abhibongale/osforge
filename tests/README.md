@@ -6,13 +6,46 @@ This directory contains test scripts and validation tools for OSForge components
 
 ```
 tests/
+├── cli/
+│   └── test-build-command.sh   # Build command CLI tests
 ├── images/
 │   └── base/
-│       └── test-build.sh    # Base image build validation
-└── README.md                # This file
+│       └── test-build.sh        # Base image build validation
+└── README.md                    # This file
 ```
 
 ## Running Tests
+
+### Quick Start - Run All Tests
+
+```bash
+cd tests
+./run-all-tests.sh
+```
+
+This runs all test suites and provides a summary.
+
+### CLI Command Tests
+
+Test the osforge CLI command parsing and validation:
+
+```bash
+cd tests/cli
+
+# Run build command tests (~5 seconds)
+./test-build-command.sh
+```
+
+**What it tests:**
+- Argument parsing (--deps, --full, --tag, --push, --no-cache)
+- Error handling (missing arguments, invalid flags)
+- Mutual exclusivity (--deps and --full together)
+- Utility commands (--status, --validate)
+- Help documentation completeness
+
+**Prerequisites:**
+- osforge installed: `./scripts/install.sh --dev`
+- No images required (tests argument parsing only)
 
 ### Base Image Tests
 
