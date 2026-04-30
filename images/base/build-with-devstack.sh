@@ -53,11 +53,10 @@ fi
 echo "Removing policy-rc.d to allow service starts..."
 podman exec "$CONTAINER_NAME" rm -f /usr/sbin/policy-rc.d
 
-# Mask ovs-vswitchd.service BEFORE DevStack tries to start it
-# OVN userspace mode only needs ovsdb-server, not ovs-vswitchd
-# ovs-vswitchd tries to load kernel modules which fail in containers
-echo "Masking ovs-vswitchd.service (not needed for OVN userspace)..."
-podman exec "$CONTAINER_NAME" bash -c "systemctl mask ovs-vswitchd.service 2>/dev/null || true"
+# Patch OVS kernel module loader to skip modprobe in containers
+# This allows OVS to work in userspace mode without requiring host kernel modules
+echo "Patching OVS to skip kernel module loading..."
+podman exec "$CONTAINER_NAME" bash -c 'if [ -f /usr/share/openvswitch/scripts/ovs-kmod-ctl ]; then sed -i "s/test -e \/sys\/module\/openvswitch && return 0/return 0  # Skip kernel module loading in container/" /usr/share/openvswitch/scripts/ovs-kmod-ctl; fi'
 
 # Start VirtualBMC daemon
 # VirtualBMC provides IPMI simulation for virtual baremetal nodes
