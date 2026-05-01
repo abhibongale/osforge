@@ -185,6 +185,30 @@ EOF
         echo "[setup-vbmc]   WARNING: VirtualBMC may not be running for $NODE_NAME"
     fi
 
+    # Wait for Ironic API to be ready (only on first node)
+    if [[ $i -eq 0 ]]; then
+        echo "[setup-vbmc] Waiting for Ironic API to be ready..."
+        local max_wait=120
+        local elapsed=0
+        while [[ $elapsed -lt $max_wait ]]; do
+            if openstack baremetal driver list &>/dev/null; then
+                echo "[setup-vbmc] Ironic API is ready"
+                break
+            fi
+            echo "[setup-vbmc]   Waiting for API... ($elapsed/$max_wait seconds)"
+            sleep 5
+            ((elapsed+=5))
+        done
+
+        if [[ $elapsed -ge $max_wait ]]; then
+            echo "[setup-vbmc] ERROR: Ironic API not ready after ${max_wait}s"
+            echo "[setup-vbmc] Checking Ironic services..."
+            systemctl status devstack@ir-api.service --no-pager || true
+            systemctl status devstack@ir-cond.service --no-pager || true
+            exit 1
+        fi
+    fi
+
     # Register node in Ironic
     echo "[setup-vbmc]   Registering node in Ironic..."
 
