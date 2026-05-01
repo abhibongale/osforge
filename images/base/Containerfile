@@ -24,11 +24,10 @@ RUN apt-get update && \
         systemd-sysv \
         lsb-release \
         libvirt-dev \
-        pkg-config \
-        bridge-utils \
+        net-tools \
         iproute2 \
         iptables \
-        net-tools \
+        bridge-utils \
         curl \
         wget \
         vim \
