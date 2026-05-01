@@ -14,6 +14,12 @@ sleep 2
 systemctl start rabbitmq-server
 sleep 2
 
+# Create stackrabbit user for OpenStack services
+# DevStack expects this user to exist for AMQP messaging
+rabbitmqctl add_user stackrabbit secret 2>/dev/null || rabbitmqctl change_password stackrabbit secret
+rabbitmqctl set_permissions -p / stackrabbit '.*' '.*' '.*'
+echo "[setup-services] RabbitMQ stackrabbit user configured"
+
 # Start Apache (HTTP proxy for Keystone and other services)
 systemctl start apache2
 sleep 2
