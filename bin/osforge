@@ -93,6 +93,7 @@ cmd_run() {
     local neutron_repo=""
     local branch=""
     local devstack_branch=""
+    local tag=""
     local verbose=false
     local keep=false
     local no_pull=false
@@ -126,6 +127,10 @@ cmd_run() {
                 ;;
             --devstack-branch)
                 devstack_branch="$2"
+                shift 2
+                ;;
+            --tag)
+                tag="$2"
                 shift 2
                 ;;
             --verbose)
@@ -169,7 +174,7 @@ cmd_run() {
     fi
 
     # Run the job
-    run_job "$job_name" "$ironic_repo" "$ipa_repo" "$devstack_repo" "$nova_repo" "$neutron_repo" "$branch" "$devstack_branch" "$verbose" "$keep" "$no_pull"
+    run_job "$job_name" "$ironic_repo" "$ipa_repo" "$devstack_repo" "$nova_repo" "$neutron_repo" "$branch" "$devstack_branch" "$tag" "$verbose" "$keep" "$no_pull"
 }
 
 # Command: logs - View logs from last run
@@ -410,6 +415,7 @@ RUN OPTIONS:
     --neutron-repo <path>      Path to local Neutron repository
     --branch <branch>          Branch/tag to checkout (applies to all repos)
     --devstack-branch <branch> Branch/tag for DevStack specifically
+    --tag <tag>                Use specific base image tag (default: latest)
     --verbose                  Enable verbose output
     --keep                     Keep container running after test
     --no-pull                  Don't pull base image before run
@@ -444,6 +450,9 @@ EXAMPLES:
     osforge run devstack-platform-rocky-blue-onyx \
       --nova-repo ~/dev/nova \
       --branch a1b2c3d
+
+    # Use custom base image tag
+    osforge run ironic-tempest-bios-ipmi-autodetect --tag alpha
 
     # Build base image (dependencies only)
     osforge build --deps
