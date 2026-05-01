@@ -11,9 +11,16 @@ run_job() {
     local neutron_repo="$6"
     local branch="$7"
     local devstack_branch="$8"
-    local verbose="$9"
-    local keep="${10}"
-    local no_pull="${11}"
+    local tag="$9"
+    local verbose="${10}"
+    local keep="${11}"
+    local no_pull="${12}"
+
+    # Set BASE_IMAGE if custom tag specified
+    if [[ -n "$tag" ]]; then
+        BASE_IMAGE="quay.io/osforge/base:$tag"
+        log_info "Using custom image tag: $tag"
+    fi
 
     # Enable verbose logging if requested
     if [[ "$verbose" == "true" ]]; then
