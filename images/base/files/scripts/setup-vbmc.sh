@@ -12,14 +12,14 @@ if [[ -f /opt/stack/devstack/.stackenv ]]; then
 fi
 
 # Set OpenStack credentials directly (avoid DevStack functions issues)
+# Use system scope for Ironic (required by oslo.policy)
 export OS_AUTH_URL=http://${SERVICE_HOST:-127.0.0.1}/identity
-export OS_PROJECT_NAME=admin
 export OS_USERNAME=admin
 export OS_PASSWORD=secret
 export OS_REGION_NAME=RegionOne
 export OS_IDENTITY_API_VERSION=3
 export OS_USER_DOMAIN_NAME=Default
-export OS_PROJECT_DOMAIN_NAME=Default
+export OS_SYSTEM_SCOPE=all
 
 echo "[setup-vbmc] Using SERVICE_HOST: ${SERVICE_HOST:-127.0.0.1}"
 
@@ -188,8 +188,8 @@ EOF
     # Wait for Ironic API to be ready (only on first node)
     if [[ $i -eq 0 ]]; then
         echo "[setup-vbmc] Waiting for Ironic API to be ready..."
-        local max_wait=120
-        local elapsed=0
+        max_wait=120
+        elapsed=0
         while [[ $elapsed -lt $max_wait ]]; do
             if openstack baremetal driver list &>/dev/null; then
                 echo "[setup-vbmc] Ironic API is ready"
