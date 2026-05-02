@@ -146,9 +146,11 @@ mkdir -p "$LOG_DIR"
 
 # List available tests matching the regex (for debugging)
 echo "[run-tempest] Checking for tests matching regex: $TEST_REGEX"
-TEST_COUNT=$(tempest run --list-tests --regex "$TEST_REGEX" 2>/dev/null | grep -c "^" || echo "0")
+TEST_COUNT=$(tempest run --list-tests --regex "$TEST_REGEX" 2>/dev/null | grep -c "^[a-z]" || echo "0")
 echo "[run-tempest] Found $TEST_COUNT tests matching the regex"
 
+# Convert to integer and check
+TEST_COUNT=$(echo "$TEST_COUNT" | tr -d '[:space:]')
 if [[ "$TEST_COUNT" -eq 0 ]]; then
     echo "[run-tempest] ERROR: No tests match the regex: $TEST_REGEX"
     echo "[run-tempest] Listing available Ironic tests..."

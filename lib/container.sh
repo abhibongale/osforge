@@ -5,6 +5,28 @@
 CURRENT_CONTAINER=""
 CURRENT_LOG_DIR=""
 
+# Helper function to mount a repository
+mount_repo() {
+    local repo_path="$1"
+    local mount_point="$2"
+    local repo_name="$3"
+    local mount_args_var="$4"
+
+    if [[ -n "$repo_path" ]]; then
+        local resolved_repo
+        resolved_repo=$(resolve_path "$repo_path")
+
+        if [[ ! -d "$resolved_repo" ]]; then
+            log_error "$repo_name repository not found: $resolved_repo"
+            return 1
+        fi
+
+        log_info "Mounting $repo_name repo: $resolved_repo"
+        eval "$mount_args_var+=(-v \"$resolved_repo:$mount_point:rw\")"
+    fi
+    return 0
+}
+
 # Start container for job
 container_start() {
     local job_name="$1"
@@ -27,6 +49,8 @@ container_start() {
             log_error "Failed to pull base image"
             return 1
         fi
+    else
+        log_info "Skipping image pull (--no-pull specified)"
     fi
 
     # Generate container name
@@ -37,34 +61,14 @@ container_start() {
     # Build mount arguments
     local mount_args=()
 
-    # Helper function to mount a repo
-    mount_repo() {
-        local repo_path="$1"
-        local mount_point="$2"
-        local repo_name="$3"
-
-        if [[ -n "$repo_path" ]]; then
-            local resolved_repo
-            resolved_repo=$(resolve_path "$repo_path")
-
-            if [[ ! -d "$resolved_repo" ]]; then
-                log_error "$repo_name repository not found: $resolved_repo"
-                return 1
-            fi
-
-            log_info "Mounting $repo_name repo: $resolved_repo"
-            mount_args+=(-v "$resolved_repo:$mount_point:rw")
-        fi
-    }
-
-    # Mount repositories
-    mount_repo "$ironic_repo" "/opt/stack/ironic" "Ironic"
-    mount_repo "$ipa_repo" "/opt/stack/ironic-python-agent" "IPA"
-    mount_repo "$itp_repo" "/opt/stack/ironic-tempest-plugin" "Ironic Tempest Plugin"
-    mount_repo "$tempest_repo" "/opt/stack/tempest" "Tempest"
-    mount_repo "$devstack_repo" "/opt/stack/devstack" "DevStack"
-    mount_repo "$nova_repo" "/opt/stack/nova" "Nova"
-    mount_repo "$neutron_repo" "/opt/stack/neutron" "Neutron"
+    # Mount repositories if provided
+    mount_repo "$ironic_repo" "/opt/stack/ironic" "Ironic" "mount_args" || return 1
+    mount_repo "$ipa_repo" "/opt/stack/ironic-python-agent" "Ironic Python Agent" "mount_args" || return 1
+    mount_repo "$itp_repo" "/opt/stack/ironic-tempest-plugin" "Ironic Tempest Plugin" "mount_args" || return 1
+    mount_repo "$tempest_repo" "/opt/stack/tempest" "Tempest" "mount_args" || return 1
+    mount_repo "$devstack_repo" "/opt/stack/devstack" "DevStack" "mount_args" || return 1
+    mount_repo "$nova_repo" "/opt/stack/nova" "Nova" "mount_args" || return 1
+    mount_repo "$neutron_repo" "/opt/stack/neutron" "Neutron" "mount_args" || return 1
 
     # Mount log directory
     mount_args+=(-v "$log_dir:/opt/stack/logs:rw")

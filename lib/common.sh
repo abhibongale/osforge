@@ -108,9 +108,27 @@ yaml_get() {
         return 1
     fi
 
-    # Very basic YAML parsing
-    # TODO: Use a proper YAML parser (yq) if needed
-    grep "^${key}:" "$file" | sed "s/^${key}:[[:space:]]*//" | tr -d '"' | tr -d "'"
+    # Handle nested keys (e.g., "test.regex" -> section: test, key: regex)
+    if [[ "$key" == *.* ]]; then
+        local section="${key%%.*}"
+        local subkey="${key#*.}"
+
+        # Extract the section and find the subkey within it
+        awk -v section="$section" -v subkey="$subkey" '
+            /^[a-z]/ { in_section=0 }
+            $0 ~ "^" section ":" { in_section=1; next }
+            in_section && $1 ~ "^" subkey ":" {
+                sub(/^[[:space:]]*[^:]+:[[:space:]]*/, "")
+                gsub(/"/, "")
+                gsub(/'\''/, "")
+                print
+                exit
+            }
+        ' "$file"
+    else
+        # Simple top-level key
+        grep "^${key}:" "$file" | sed "s/^${key}:[[:space:]]*//" | tr -d '"' | tr -d "'"
+    fi
 }
 
 # Resolve path (handle ~)
