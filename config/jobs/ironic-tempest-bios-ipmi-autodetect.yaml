@@ -50,7 +50,7 @@ devstack:
 # Test execution
 test:
   framework: tempest
-  regex: test_baremetal_server_ops_wholedisk_image
+  regex: ironic_tempest_plugin.tests.scenario.test_baremetal_basic_ops.BaremetalBasicOps.test_baremetal_server_ops_wholedisk_image
   concurrency: 1
   timeout: 2600
 
