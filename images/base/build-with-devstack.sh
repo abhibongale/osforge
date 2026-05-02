@@ -73,6 +73,18 @@ if podman exec -u stack "$CONTAINER_NAME" bash -c 'cd /opt/stack/devstack && ./s
     echo "===> DevStack installation successful!"
     echo ""
 
+    # Install tempest plugins into DevStack virtualenv
+    echo "===> Installing tempest plugins..."
+
+    # Fix git safe.directory for repositories
+    podman exec "$CONTAINER_NAME" bash -c 'git config --global --add safe.directory /opt/stack/ironic-tempest-plugin'
+    podman exec "$CONTAINER_NAME" bash -c 'git config --global --add safe.directory /opt/stack/tempest'
+
+    # Install ironic-tempest-plugin
+    podman exec -u stack "$CONTAINER_NAME" bash -c 'source /opt/stack/data/venv/bin/activate && cd /opt/stack/ironic-tempest-plugin && pip install -e .'
+
+    echo "===> Tempest plugins installed"
+
     # Stop all services before committing (Option A: services stopped in base image, started at runtime)
     echo "===> Stopping services before commit..."
     podman exec "$CONTAINER_NAME" systemctl stop 'devstack@*' || true
