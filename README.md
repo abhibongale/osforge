@@ -2,11 +2,11 @@
 
 Tired of waiting 3 hours for OpenStack CI? Run Zuul jobs locally in containers against your changes in ~20 minutes!
 
-> **Status (2026-04-29)**: ✅ Phase 1 Complete | 🚧 Phase 2 In Progress
-> - Base image built and working
-> - CLI fully functional
-> - Service startup tested (~60 seconds)
-> - VirtualBMC and Tempest runners need implementation
+> **Status (2026-05-02)**: ✅ Fully Functional | 🐛 Critical Bugs Fixed
+> - All core functionality working end-to-end
+> - Fixed 7 critical bugs preventing execution
+> - Tests now run successfully
+> - Ready for use and testing
 
 ## What is OSForge?
 
@@ -21,6 +21,22 @@ Make change → Push to Gerrit → Wait 3 hours → Test fails → Repeat
 ```
 Make change → osforge run <job> → Wait 20 min → See result → Fix locally → Repeat
 ```
+
+## Recent Updates
+
+### 2026-05-02 - Critical Bug Fixes 🐛
+
+Fixed 7 critical bugs that prevented OSForge from running:
+
+1. **Bash syntax error** - Removed `local` keyword outside function in setup-vbmc.sh
+2. **Authentication scope** - Changed from project scope to system scope for Ironic API
+3. **RabbitMQ user** - Created missing `stackrabbit` user (fixed HTTP 503 errors)
+4. **Tempest command** - Added virtualenv activation before running tempest
+5. **stestr flag** - Fixed `--exists` flag compatibility with newer stestr versions
+6. **Plugin installation** - Installed ironic-tempest-plugin during image build
+7. **Test discovery** - Added helper to list available tests when regex doesn't match
+
+**Result**: OSForge now works end-to-end! Tests can be discovered and run successfully.
 
 ## Quick Start
 
