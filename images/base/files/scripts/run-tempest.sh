@@ -53,6 +53,13 @@ tempest init /opt/stack/tempest 2>/dev/null || true
 # Configure tempest
 echo "[run-tempest] Configuring tempest..."
 
+# Get dynamic values
+IMAGE_ID=$(openstack image list -f value -c ID | head -1)
+PUBLIC_NETWORK_ID=$(openstack network list --external -f value -c ID | head -1)
+
+echo "[run-tempest] Using image: $IMAGE_ID"
+echo "[run-tempest] Using public network: $PUBLIC_NETWORK_ID"
+
 # Create or update tempest.conf
 cat > etc/tempest.conf <<EOF
 [DEFAULT]
@@ -78,8 +85,8 @@ api_v2 = false
 api_v3 = true
 
 [compute]
-image_ref = \$(openstack image list -f value -c ID | head -1)
-image_ref_alt = \$(openstack image list -f value -c ID | head -1)
+image_ref = ${IMAGE_ID}
+image_ref_alt = ${IMAGE_ID}
 flavor_ref = baremetal
 min_compute_nodes = 1
 max_microversion = latest
@@ -91,7 +98,7 @@ resize = false
 suspend = false
 
 [network]
-public_network_id = \$(openstack network list --external -f value -c ID | head -1)
+public_network_id = ${PUBLIC_NETWORK_ID}
 project_networks_reachable = false
 
 [network-feature-enabled]
