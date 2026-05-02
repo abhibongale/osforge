@@ -61,6 +61,8 @@ osforge run ironic-tempest-bios-ipmi-autodetect \
 
 - ✅ Run Zuul jobs locally
 - ✅ Mount your local code changes
+- ✅ **NEW**: Multi-repository support (test Ironic + Plugin + Nova together!)
+- ✅ **NEW**: Auto-detect ironic-tempest-plugin directory
 - ✅ Fast iteration (no commit needed!)
 - ✅ Full Ironic + Swift + VirtualBMC environment
 - ✅ Detailed logs and debugging
@@ -125,6 +127,47 @@ osforge run ironic-tempest-bios-ipmi-autodetect
 
 # Or specify repo explicitly
 osforge run ironic-tempest-bios-ipmi-autodetect --ironic-repo ~/dev/ironic
+```
+
+### Testing Plugin Changes (NEW!)
+
+Test your ironic-tempest-plugin changes without rebuilding the image:
+
+```bash
+# Auto-detection: just cd to your plugin directory
+cd ~/dev/ironic-tempest-plugin
+osforge run ironic-tempest-bios-ipmi-autodetect
+# ✅ Automatically detects and mounts plugin!
+
+# Or specify explicitly
+osforge run ironic-tempest-bios-ipmi-autodetect \
+  --itp-repo ~/dev/ironic-tempest-plugin
+
+# Test both Ironic and plugin changes together
+osforge run ironic-tempest-bios-ipmi-autodetect \
+  --ironic-repo ~/dev/ironic \
+  --itp-repo ~/dev/ironic-tempest-plugin
+```
+
+### Multi-Repository Testing (NEW!)
+
+Test complex changes across multiple projects:
+
+```bash
+# Test Ironic + Nova + Plugin changes together
+osforge run ironic-tempest-bios-ipmi-autodetect \
+  --ironic-repo ~/dev/ironic \
+  --nova-repo ~/dev/nova \
+  --itp-repo ~/dev/ironic-tempest-plugin
+
+# All available repository options:
+# --ironic-repo                # Ironic core
+# --itp-repo                   # Ironic Tempest Plugin (auto-detected!)
+# --ipa-repo                   # Ironic Python Agent
+# --tempest-repo               # Tempest framework
+# --devstack-repo              # DevStack
+# --nova-repo                  # Nova compute
+# --neutron-repo               # Neutron networking
 ```
 
 ### Viewing Logs
