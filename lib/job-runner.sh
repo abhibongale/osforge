@@ -6,15 +6,17 @@ run_job() {
     local job_name="$1"
     local ironic_repo="$2"
     local ipa_repo="$3"
-    local devstack_repo="$4"
-    local nova_repo="$5"
-    local neutron_repo="$6"
-    local branch="$7"
-    local devstack_branch="$8"
-    local tag="$9"
-    local verbose="${10}"
-    local keep="${11}"
-    local no_pull="${12}"
+    local itp_repo="$4"
+    local tempest_repo="$5"
+    local devstack_repo="$6"
+    local nova_repo="$7"
+    local neutron_repo="$8"
+    local branch="$9"
+    local devstack_branch="${10}"
+    local tag="${11}"
+    local verbose="${12}"
+    local keep="${13}"
+    local no_pull="${14}"
 
     # Set BASE_IMAGE if custom tag specified
     if [[ -n "$tag" ]]; then
@@ -51,7 +53,7 @@ run_job() {
     save_run_metadata "$CURRENT_LOG_DIR" "$job_name" "$ironic_repo"
 
     # Start container
-    if ! container_start "$job_name" "$ironic_repo" "$CURRENT_LOG_DIR" "$no_pull"; then
+    if ! container_start "$job_name" "$ironic_repo" "$ipa_repo" "$itp_repo" "$tempest_repo" "$devstack_repo" "$nova_repo" "$neutron_repo" "$CURRENT_LOG_DIR" "$no_pull"; then
         log_error "Failed to start container"
         exit 1
     fi
@@ -63,6 +65,13 @@ run_job() {
     log_step "Setting up services..."
     if ! setup_services; then
         log_error "Failed to setup services"
+        container_stop
+        exit 1
+    fi
+
+    # Reinstall mounted repos if provided
+    if ! reinstall_mounted_repos "$itp_repo" "$tempest_repo"; then
+        log_error "Failed to reinstall mounted repositories"
         container_stop
         exit 1
     fi
@@ -135,6 +144,11 @@ setup_services() {
         container_exec systemctl status rabbitmq-server --no-pager || true
         return 1
     fi
+
+    # Create stackrabbit user for OpenStack services
+    log_info "Configuring RabbitMQ users..."
+    container_exec bash -c "rabbitmqctl add_user stackrabbit secret 2>/dev/null || rabbitmqctl change_password stackrabbit secret"
+    container_exec bash -c "rabbitmqctl set_permissions -p / stackrabbit '.*' '.*' '.*'"
     log_success "RabbitMQ started"
 
     # Start Apache (HTTP proxy for Keystone and other OpenStack APIs)
@@ -183,6 +197,43 @@ setup_services() {
     fi
 
     log_success "All services started successfully"
+    return 0
+}
+
+# Reinstall mounted repositories in the virtualenv
+reinstall_mounted_repos() {
+    local itp_repo="$1"
+    local tempest_repo="$2"
+
+    # If no repos to reinstall, return early
+    if [[ -z "$itp_repo" ]] && [[ -z "$tempest_repo" ]]; then
+        return 0
+    fi
+
+    log_info "Reinstalling mounted repositories in virtualenv..."
+
+    # Fix git safe.directory for mounted repos
+    if [[ -n "$itp_repo" ]]; then
+        log_info "  Reinstalling ironic-tempest-plugin from local mount..."
+        container_exec bash -c "git config --global --add safe.directory /opt/stack/ironic-tempest-plugin"
+        if ! container_exec bash -c "source /opt/stack/data/venv/bin/activate && cd /opt/stack/ironic-tempest-plugin && pip install -e . -q"; then
+            log_error "Failed to reinstall ironic-tempest-plugin"
+            return 1
+        fi
+        log_success "  ironic-tempest-plugin reinstalled"
+    fi
+
+    if [[ -n "$tempest_repo" ]]; then
+        log_info "  Reinstalling tempest from local mount..."
+        container_exec bash -c "git config --global --add safe.directory /opt/stack/tempest"
+        if ! container_exec bash -c "source /opt/stack/data/venv/bin/activate && cd /opt/stack/tempest && pip install -e . -q"; then
+            log_error "Failed to reinstall tempest"
+            return 1
+        fi
+        log_success "  tempest reinstalled"
+    fi
+
+    log_success "Mounted repositories reinstalled"
     return 0
 }
 
@@ -294,6 +345,10 @@ run_tempest_test() {
     log_debug "Test regex: $test_regex"
     log_debug "Test concurrency: $test_concurrency"
     log_debug "Test timeout: $test_timeout"
+
+    # TEMPORARY FIX: Patch run-tempest.sh to activate virtualenv and fix stestr (for testing only)
+    container_exec bash -c "sed -i '/echo \"\[run-tempest\] Using SERVICE_HOST:/a source /opt/stack/data/venv/bin/activate' /usr/local/bin/run-tempest.sh"
+    container_exec bash -c "sed -i 's/if stestr last --exists; then/if stestr last \&>\\/dev\\/null; then/' /usr/local/bin/run-tempest.sh"
 
     # Call run-tempest.sh script in container with configuration
     if container_exec bash -c "export TEST_REGEX='${test_regex}' TEST_CONCURRENCY='${test_concurrency}' TEST_TIMEOUT='${test_timeout}' && /usr/local/bin/run-tempest.sh '$job_name' /opt/stack/logs"; then
