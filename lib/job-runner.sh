@@ -160,6 +160,14 @@ setup_services() {
     fi
     log_success "Apache started"
 
+    # Start OVN (Open Virtual Network) services
+    log_info "Starting OVN services..."
+    if ! container_exec bash -c "systemctl start ovn-ovsdb-server-nb.service ovn-ovsdb-server-sb.service ovn-northd.service && sleep 3"; then
+        log_warn "Some OVN services may not have started"
+    else
+        log_success "OVN services started"
+    fi
+
     # Start all DevStack services
     log_info "Starting DevStack services (this may take 30-60 seconds)..."
     if ! container_exec systemctl start --all 'devstack@*'; then

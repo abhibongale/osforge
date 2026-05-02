@@ -28,6 +28,14 @@ sleep 2
 systemctl start openvswitch-switch
 sleep 2
 
+# Start OVN (Open Virtual Network) databases and northd daemon
+# Required for Neutron ML2/OVN networking
+systemctl start ovn-ovsdb-server-nb.service
+systemctl start ovn-ovsdb-server-sb.service
+systemctl start ovn-northd.service
+sleep 3
+echo "[setup-services] OVN services started"
+
 # Start all DevStack services (Keystone, Nova, Neutron, Glance, Placement, Ironic, Swift, etc.)
 # This starts all devstack@* services which are the main OpenStack components
 systemctl start 'devstack@*'
