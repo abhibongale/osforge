@@ -88,6 +88,8 @@ cmd_run() {
     local job_name=""
     local ironic_repo=""
     local ipa_repo=""
+    local itp_repo=""
+    local tempest_repo=""
     local devstack_repo=""
     local nova_repo=""
     local neutron_repo=""
@@ -107,6 +109,14 @@ cmd_run() {
                 ;;
             --ipa-repo)
                 ipa_repo="$2"
+                shift 2
+                ;;
+            --itp-repo|--ironic-tempest-plugin-repo)
+                itp_repo="$2"
+                shift 2
+                ;;
+            --tempest-repo)
+                tempest_repo="$2"
                 shift 2
                 ;;
             --devstack-repo)
@@ -173,8 +183,14 @@ cmd_run() {
         log_info "Auto-detected Ironic repo: $ironic_repo"
     fi
 
+    # Auto-detect ironic-tempest-plugin repo if in that directory
+    if [[ -z "$itp_repo" ]] && [[ -f "setup.cfg" ]] && grep -q "ironic-tempest-plugin" setup.cfg 2>/dev/null; then
+        itp_repo="$(pwd)"
+        log_info "Auto-detected Ironic Tempest Plugin repo: $itp_repo"
+    fi
+
     # Run the job
-    run_job "$job_name" "$ironic_repo" "$ipa_repo" "$devstack_repo" "$nova_repo" "$neutron_repo" "$branch" "$devstack_branch" "$tag" "$verbose" "$keep" "$no_pull"
+    run_job "$job_name" "$ironic_repo" "$ipa_repo" "$itp_repo" "$tempest_repo" "$devstack_repo" "$nova_repo" "$neutron_repo" "$branch" "$devstack_branch" "$tag" "$verbose" "$keep" "$no_pull"
 }
 
 # Command: logs - View logs from last run
@@ -410,6 +426,8 @@ COMMANDS:
 RUN OPTIONS:
     --ironic-repo <path>       Path to local Ironic repository
     --ipa-repo <path>          Path to local Ironic Python Agent repository
+    --itp-repo <path>          Path to local Ironic Tempest Plugin repository
+    --tempest-repo <path>      Path to local Tempest repository
     --devstack-repo <path>     Path to local DevStack repository
     --nova-repo <path>         Path to local Nova repository
     --neutron-repo <path>      Path to local Neutron repository
@@ -437,6 +455,15 @@ EXAMPLES:
 
     # Run with explicit repo path
     osforge run ironic-tempest-bios-ipmi-autodetect --ironic-repo ~/dev/ironic
+
+    # Test ironic-tempest-plugin changes (auto-detected if in that directory)
+    cd ~/dev/ironic-tempest-plugin
+    osforge run ironic-tempest-bios-ipmi-autodetect
+
+    # Or explicitly specify the path
+    osforge run ironic-tempest-bios-ipmi-autodetect \
+      --ironic-repo ~/dev/ironic \
+      --itp-repo ~/dev/ironic-tempest-plugin
 
     # Test stable branch (2026.1)
     osforge run devstack-platform-rocky-blue-onyx --branch stable/2026.1
