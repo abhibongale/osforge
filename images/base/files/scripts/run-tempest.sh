@@ -45,11 +45,10 @@ echo "[run-tempest]   Regex: $TEST_REGEX"
 echo "[run-tempest]   Concurrency: $TEST_CONCURRENCY"
 echo "[run-tempest]   Timeout: $TEST_TIMEOUT seconds"
 
-# Initialize tempest workspace if needed
+# Initialize tempest workspace - always reinitialize to avoid oslo_config errors
 echo "[run-tempest] Initializing tempest workspace..."
-if [[ ! -f .stestr.conf ]]; then
-    tempest init /opt/stack/tempest
-fi
+rm -rf .testrepository .stestr 2>/dev/null || true
+tempest init /opt/stack/tempest 2>/dev/null || true
 
 # Configure tempest
 echo "[run-tempest] Configuring tempest..."
