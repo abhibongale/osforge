@@ -9,8 +9,14 @@ CURRENT_LOG_DIR=""
 container_start() {
     local job_name="$1"
     local ironic_repo="$2"
-    local log_dir="$3"
-    local no_pull="$4"
+    local ipa_repo="$3"
+    local itp_repo="$4"
+    local tempest_repo="$5"
+    local devstack_repo="$6"
+    local nova_repo="$7"
+    local neutron_repo="$8"
+    local log_dir="$9"
+    local no_pull="${10}"
 
     log_step "Starting container for job: $job_name"
 
@@ -31,19 +37,34 @@ container_start() {
     # Build mount arguments
     local mount_args=()
 
-    # Mount ironic repo if provided
-    if [[ -n "$ironic_repo" ]]; then
-        local resolved_repo
-        resolved_repo=$(resolve_path "$ironic_repo")
+    # Helper function to mount a repo
+    mount_repo() {
+        local repo_path="$1"
+        local mount_point="$2"
+        local repo_name="$3"
 
-        if [[ ! -d "$resolved_repo" ]]; then
-            log_error "Ironic repository not found: $resolved_repo"
-            return 1
+        if [[ -n "$repo_path" ]]; then
+            local resolved_repo
+            resolved_repo=$(resolve_path "$repo_path")
+
+            if [[ ! -d "$resolved_repo" ]]; then
+                log_error "$repo_name repository not found: $resolved_repo"
+                return 1
+            fi
+
+            log_info "Mounting $repo_name repo: $resolved_repo"
+            mount_args+=(-v "$resolved_repo:$mount_point:rw")
         fi
+    }
 
-        log_info "Mounting Ironic repo: $resolved_repo"
-        mount_args+=(-v "$resolved_repo:/opt/stack/ironic:rw")
-    fi
+    # Mount repositories
+    mount_repo "$ironic_repo" "/opt/stack/ironic" "Ironic"
+    mount_repo "$ipa_repo" "/opt/stack/ironic-python-agent" "IPA"
+    mount_repo "$itp_repo" "/opt/stack/ironic-tempest-plugin" "Ironic Tempest Plugin"
+    mount_repo "$tempest_repo" "/opt/stack/tempest" "Tempest"
+    mount_repo "$devstack_repo" "/opt/stack/devstack" "DevStack"
+    mount_repo "$nova_repo" "/opt/stack/nova" "Nova"
+    mount_repo "$neutron_repo" "/opt/stack/neutron" "Neutron"
 
     # Mount log directory
     mount_args+=(-v "$log_dir:/opt/stack/logs:rw")
