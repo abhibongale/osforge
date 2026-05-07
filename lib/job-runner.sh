@@ -129,6 +129,10 @@ run_job() {
 
 # Setup services in container
 setup_services() {
+    # Reset any failed systemd units from the image (Swift mounts, kernel mounts, etc.)
+    log_info "Resetting failed systemd units..."
+    container_exec systemctl reset-failed || true
+
     # Start database and message queue first
     log_info "Starting MySQL..."
     if ! container_exec bash -c "systemctl start mysql && sleep 3 && systemctl is-active --quiet mysql"; then
@@ -139,9 +143,41 @@ setup_services() {
     log_success "MySQL started"
 
     log_info "Starting RabbitMQ..."
+    # Ensure RabbitMQ nodename is set (should be in image, but set as fallback)
+    container_exec bash -c "mkdir -p /etc/rabbitmq && grep -q 'NODENAME=rabbit@localhost' /etc/rabbitmq/rabbitmq-env.conf 2>/dev/null || echo 'NODENAME=rabbit@localhost' >> /etc/rabbitmq/rabbitmq-env.conf"
+
+    # Clean up stale RabbitMQ state that might prevent startup (in case of container restart)
+    log_debug "Cleaning up any stale RabbitMQ state..."
+    container_exec bash -c "rm -rf /var/lib/rabbitmq/mnesia/rabbit@*" || true
+
     if ! container_exec bash -c "systemctl start rabbitmq-server && sleep 5 && systemctl is-active --quiet rabbitmq-server"; then
         log_error "RabbitMQ failed to start"
         container_exec systemctl status rabbitmq-server --no-pager || true
+        container_exec journalctl -u rabbitmq-server -n 50 --no-pager || true
+        return 1
+    fi
+
+    # Wait for RabbitMQ to be ready (not just service active, but actually accepting connections)
+    log_info "Waiting for RabbitMQ to be ready..."
+    local rabbitmq_ready=false
+    for i in {1..60}; do
+        if container_exec bash -c "rabbitmqctl status >/dev/null 2>&1"; then
+            rabbitmq_ready=true
+            log_debug "RabbitMQ ready after ${i} seconds"
+            break
+        fi
+        if [[ $((i % 10)) -eq 0 ]]; then
+            log_debug "  Still waiting for RabbitMQ... ($i/60)"
+        fi
+        sleep 1
+    done
+
+    if [[ "$rabbitmq_ready" != "true" ]]; then
+        log_error "RabbitMQ did not become ready in 60 seconds"
+        log_error "Checking RabbitMQ logs and status..."
+        container_exec journalctl -u rabbitmq-server -n 100 --no-pager || true
+        container_exec rabbitmqctl status || true
+        container_exec bash -c "netstat -tlnp | grep -E '5672|15672'" || true
         return 1
     fi
 
@@ -149,7 +185,7 @@ setup_services() {
     log_info "Configuring RabbitMQ users..."
     container_exec bash -c "rabbitmqctl add_user stackrabbit secret 2>/dev/null || rabbitmqctl change_password stackrabbit secret"
     container_exec bash -c "rabbitmqctl set_permissions -p / stackrabbit '.*' '.*' '.*'"
-    log_success "RabbitMQ started"
+    log_success "RabbitMQ started and configured"
 
     # Start Apache (HTTP proxy for Keystone and other OpenStack APIs)
     log_info "Starting Apache..."
@@ -173,7 +209,8 @@ setup_services() {
     if ! container_exec systemctl start --all 'devstack@*'; then
         log_warn "Some DevStack services may not have started"
     fi
-    sleep 15
+    # Wait longer for services to fully initialize and connect to RabbitMQ
+    sleep 30
 
     # Verify key services are running
     log_info "Verifying key services..."
@@ -204,6 +241,25 @@ setup_services() {
         return 1
     fi
 
+    # Verify Keystone API is actually responding (not just service running)
+    log_info "Verifying Keystone API is responding..."
+    local keystone_ready=false
+    for i in {1..30}; do
+        if container_exec bash -c "curl -s http://127.0.0.1/identity/v3 >/dev/null 2>&1"; then
+            keystone_ready=true
+            log_debug "Keystone API ready after ${i} seconds"
+            break
+        fi
+        sleep 1
+    done
+
+    if [[ "$keystone_ready" != "true" ]]; then
+        log_error "Keystone API did not become ready in 30 seconds"
+        container_exec systemctl status devstack@keystone.service --no-pager || true
+        container_exec systemctl status apache2 --no-pager || true
+        return 1
+    fi
+
     log_success "All services started successfully"
     return 0
 }
@@ -213,35 +269,71 @@ reinstall_mounted_repos() {
     local itp_repo="$1"
     local tempest_repo="$2"
 
-    # If no repos to reinstall, return early
-    if [[ -z "$itp_repo" ]] && [[ -z "$tempest_repo" ]]; then
-        return 0
-    fi
+    # Always ensure ironic-tempest-plugin is installed and discoverable
+    log_info "Ensuring tempest plugins are properly installed..."
 
-    log_info "Reinstalling mounted repositories in virtualenv..."
+    # Fix git safe.directory for repos
+    container_exec bash -c "git config --global --add safe.directory /opt/stack/ironic-tempest-plugin" || true
+    container_exec bash -c "git config --global --add safe.directory /opt/stack/tempest" || true
 
-    # Fix git safe.directory for mounted repos
+    # If local mount provided, reinstall from there
     if [[ -n "$itp_repo" ]]; then
         log_info "  Reinstalling ironic-tempest-plugin from local mount..."
-        container_exec bash -c "git config --global --add safe.directory /opt/stack/ironic-tempest-plugin"
-        if ! container_exec bash -c "source /opt/stack/data/venv/bin/activate && cd /opt/stack/ironic-tempest-plugin && pip install -e . -q"; then
-            log_error "Failed to reinstall ironic-tempest-plugin"
+        if ! container_exec bash -c "source /opt/stack/data/venv/bin/activate && cd /opt/stack/ironic-tempest-plugin && pip install -e ."; then
+            log_error "Failed to reinstall ironic-tempest-plugin from mount"
             return 1
         fi
-        log_success "  ironic-tempest-plugin reinstalled"
+        log_success "  ironic-tempest-plugin reinstalled from mount"
+    else
+        # Verify plugin is installed and reinstall if needed
+        log_info "  Verifying ironic-tempest-plugin installation..."
+        if ! container_exec bash -c "source /opt/stack/data/venv/bin/activate && pip show ironic-tempest-plugin >/dev/null 2>&1"; then
+            log_warn "  ironic-tempest-plugin not found, installing from /opt/stack..."
+            if ! container_exec bash -c "source /opt/stack/data/venv/bin/activate && cd /opt/stack/ironic-tempest-plugin && pip install -e ."; then
+                log_error "Failed to install ironic-tempest-plugin"
+                return 1
+            fi
+        fi
+        log_success "  ironic-tempest-plugin verified"
     fi
 
     if [[ -n "$tempest_repo" ]]; then
         log_info "  Reinstalling tempest from local mount..."
-        container_exec bash -c "git config --global --add safe.directory /opt/stack/tempest"
-        if ! container_exec bash -c "source /opt/stack/data/venv/bin/activate && cd /opt/stack/tempest && pip install -e . -q"; then
-            log_error "Failed to reinstall tempest"
+        if ! container_exec bash -c "source /opt/stack/data/venv/bin/activate && cd /opt/stack/tempest && pip install -e ."; then
+            log_error "Failed to reinstall tempest from mount"
             return 1
         fi
-        log_success "  tempest reinstalled"
+        log_success "  tempest reinstalled from mount"
+    else
+        # Verify tempest is installed
+        log_info "  Verifying tempest installation..."
+        if ! container_exec bash -c "source /opt/stack/data/venv/bin/activate && pip show tempest >/dev/null 2>&1"; then
+            log_warn "  tempest not found, installing from /opt/stack..."
+            if ! container_exec bash -c "source /opt/stack/data/venv/bin/activate && cd /opt/stack/tempest && pip install -e ."; then
+                log_error "Failed to install tempest"
+                return 1
+            fi
+        fi
+        log_success "  tempest verified"
     fi
 
-    log_success "Mounted repositories reinstalled"
+    # Verify plugins are discoverable
+    log_info "  Verifying tempest plugins are discoverable..."
+    if ! container_exec bash -c "source /opt/stack/data/venv/bin/activate && cd /opt/stack/tempest && pip show ironic-tempest-plugin >/dev/null"; then
+        log_error "ironic-tempest-plugin is not installed in virtualenv"
+        return 1
+    fi
+    log_success "  Plugins installed"
+
+    # Verify stestr is available (needed for test execution)
+    log_info "  Verifying stestr is available..."
+    if ! container_exec bash -c "source /opt/stack/data/venv/bin/activate && command -v stestr >/dev/null"; then
+        log_error "stestr not found in virtualenv"
+        return 1
+    fi
+    log_success "  Stestr ready"
+
+    log_success "Tempest test environment ready"
     return 0
 }
 

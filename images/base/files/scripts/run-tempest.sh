@@ -1,6 +1,7 @@
 #!/bin/bash
 # Run Tempest tests
 # This script runs inside the container
+# Replicates how Zuul runs tempest tests using tox
 
 set -eo pipefail
 
@@ -14,7 +15,7 @@ if [[ -f /opt/stack/devstack/.stackenv ]]; then
     source /opt/stack/devstack/.stackenv
 fi
 
-# Set OpenStack credentials directly (avoid DevStack functions issues)
+# Set OpenStack credentials (required for tempest config generation)
 export OS_AUTH_URL=http://${SERVICE_HOST:-127.0.0.1}/identity
 export OS_PROJECT_NAME=admin
 export OS_USERNAME=admin
@@ -25,9 +26,6 @@ export OS_USER_DOMAIN_NAME=Default
 export OS_PROJECT_DOMAIN_NAME=Default
 
 echo "[run-tempest] Using SERVICE_HOST: ${SERVICE_HOST:-127.0.0.1}"
-
-# Activate DevStack virtualenv (where tempest is installed)
-source /opt/stack/data/venv/bin/activate
 
 # Change to tempest directory
 cd /opt/stack/tempest || {
@@ -45,17 +43,23 @@ echo "[run-tempest]   Regex: $TEST_REGEX"
 echo "[run-tempest]   Concurrency: $TEST_CONCURRENCY"
 echo "[run-tempest]   Timeout: $TEST_TIMEOUT seconds"
 
-# Initialize tempest workspace - always reinitialize to avoid oslo_config errors
-echo "[run-tempest] Initializing tempest workspace..."
+# Initialize stestr repository (Zuul's run-tempest role does this)
+echo "[run-tempest] Initializing stestr repository..."
 rm -rf .testrepository .stestr 2>/dev/null || true
-tempest init /opt/stack/tempest 2>/dev/null || true
+stestr init
+
+# Ensure etc directory exists
+mkdir -p etc
 
 # Configure tempest
 echo "[run-tempest] Configuring tempest..."
 
+# Activate virtualenv for OpenStack commands
+source /opt/stack/data/venv/bin/activate
+
 # Get dynamic values
-IMAGE_ID=$(openstack image list -f value -c ID | head -1)
-PUBLIC_NETWORK_ID=$(openstack network list --external -f value -c ID | head -1)
+IMAGE_ID=$(openstack image list -f value -c ID 2>/dev/null | head -1)
+PUBLIC_NETWORK_ID=$(openstack network list --external -f value -c ID 2>/dev/null | head -1)
 
 echo "[run-tempest] Using image: $IMAGE_ID"
 echo "[run-tempest] Using public network: $PUBLIC_NETWORK_ID"
@@ -137,43 +141,36 @@ object_versioning = true
 bulk_upload = true
 EOF
 
-# Discover Tempest plugins
-echo "[run-tempest] Discovering tempest plugins..."
-tempest list-plugins
-
-# Verify configuration
-echo "[run-tempest] Verifying tempest configuration..."
-tempest verify-config -r compute,network,baremetal || {
-    echo "[run-tempest] WARNING: Configuration verification had warnings (continuing anyway)"
-}
-
 # Create log directory
 mkdir -p "$LOG_DIR"
 
-# List available tests matching the regex (for debugging)
-echo "[run-tempest] Checking for tests matching regex: $TEST_REGEX"
-TEST_COUNT=$(tempest run --list-tests --regex "$TEST_REGEX" 2>/dev/null | grep -c "^[a-z]" || echo "0")
-echo "[run-tempest] Found $TEST_COUNT tests matching the regex"
-
-# Convert to integer and check
-TEST_COUNT=$(echo "$TEST_COUNT" | tr -d '[:space:]')
-if [[ "$TEST_COUNT" -eq 0 ]]; then
-    echo "[run-tempest] ERROR: No tests match the regex: $TEST_REGEX"
-    echo "[run-tempest] Listing available Ironic tests..."
-    tempest run --list-tests --regex "ironic" 2>/dev/null | head -20 || true
-    exit 1
+# Verify ironic-tempest-plugin is installed in the virtualenv
+echo "[run-tempest] Verifying ironic-tempest-plugin installation..."
+if ! pip show ironic-tempest-plugin >/dev/null 2>&1; then
+    echo "[run-tempest] ERROR: ironic-tempest-plugin not installed in virtualenv"
+    echo "[run-tempest] Installing from /opt/stack/ironic-tempest-plugin..."
+    pip install -e /opt/stack/ironic-tempest-plugin || {
+        echo "[run-tempest] ERROR: Failed to install ironic-tempest-plugin"
+        exit 1
+    }
 fi
 
-# Run the tests
-echo "[run-tempest] Starting test execution..."
-echo "[run-tempest] This may take 20-30 minutes..."
+# List plugins
+echo "[run-tempest] Tempest plugins:"
+pip list | grep tempest || true
+echo ""
 
-# Run tempest with timeout
+# Run tests using stestr directly (this is what Zuul's run-tempest role does)
+echo "[run-tempest] Starting test execution using stestr..."
+echo "[run-tempest] This may take 20-30 minutes..."
+echo "[run-tempest] Command: stestr run --concurrency $TEST_CONCURRENCY $TEST_REGEX"
+
+# Run stestr directly (matching Zuul's run-tempest Ansible role behavior)
+# stestr handles test discovery and execution
 TEMPEST_EXIT_CODE=0
-timeout "$TEST_TIMEOUT" tempest run \
-    --regex "$TEST_REGEX" \
+timeout "$TEST_TIMEOUT" stestr run \
     --concurrency "$TEST_CONCURRENCY" \
-    --black-regex '(?!^\s*$)' 2>&1 | tee "${LOG_DIR}/tempest-output.log" || TEMPEST_EXIT_CODE=$?
+    "$TEST_REGEX" 2>&1 | tee "${LOG_DIR}/tempest-output.log" || TEMPEST_EXIT_CODE=$?
 
 # Handle timeout
 if [[ $TEMPEST_EXIT_CODE -eq 124 ]]; then
@@ -184,41 +181,46 @@ fi
 # Generate test results
 echo "[run-tempest] Generating test results..."
 
-# Get test results summary
-# Check if any tests were run by checking stestr repository
-if stestr last &>/dev/null; then
-    echo "[run-tempest] Test summary:"
-    stestr last --subunit | subunit-stats | tee "${LOG_DIR}/test-summary.txt"
-
-    # Generate HTML report
-    echo "[run-tempest] Generating HTML report..."
-    stestr last --subunit | subunit2html "${LOG_DIR}/tempest-results.html" || {
-        echo "[run-tempest] WARNING: Could not generate HTML report"
-    }
-
-    # Generate JUnit XML
-    echo "[run-tempest] Generating JUnit XML..."
-    stestr last --subunit | subunit2junitxml --output-to="${LOG_DIR}/tempest-results.xml" || {
-        echo "[run-tempest] WARNING: Could not generate JUnit XML"
-    }
-
-    # Check if tests passed
-    if stestr last --subunit | subunit-stats | grep -q "Ran 0 tests"; then
-        echo "[run-tempest] ERROR: No tests were run (test regex may be incorrect)"
-        exit 1
-    fi
-
-    if stestr last --subunit | subunit-stats | grep -qE "(Failed|Error): [1-9]"; then
-        echo "[run-tempest] ERROR: Some tests failed"
-        stestr last --subunit | subunit-stats
-        exit 1
-    fi
-
-    echo "[run-tempest] All tests passed!"
-else
-    echo "[run-tempest] ERROR: No test results found"
+# stestr stores results in .stestr directory
+if [[ ! -d ".stestr" ]]; then
+    echo "[run-tempest] ERROR: No test results found (.stestr directory missing)"
+    echo "[run-tempest] Check tempest-output.log for errors"
     exit 1
 fi
+
+# Get test results summary
+echo "[run-tempest] Test summary:"
+stestr last --subunit | subunit-stats | tee "${LOG_DIR}/test-summary.txt"
+
+# Generate HTML report
+echo "[run-tempest] Generating HTML report..."
+stestr last --subunit | subunit2html "${LOG_DIR}/tempest-results.html" || {
+    echo "[run-tempest] WARNING: Could not generate HTML report"
+}
+
+# Generate JUnit XML
+echo "[run-tempest] Generating JUnit XML..."
+stestr last --subunit | subunit2junitxml --output-to="${LOG_DIR}/tempest-results.xml" || {
+    echo "[run-tempest] WARNING: Could not generate JUnit XML"
+}
+
+# Check if tests passed
+TEST_SUMMARY=$(stestr last --subunit | subunit-stats 2>&1)
+echo "$TEST_SUMMARY"
+
+if echo "$TEST_SUMMARY" | grep -q "Ran 0 tests"; then
+    echo "[run-tempest] ERROR: No tests were run (test regex may be incorrect)"
+    echo "[run-tempest] Listing available tests matching pattern..."
+    stestr list "$TEST_REGEX" | head -20 || true
+    exit 1
+fi
+
+if echo "$TEST_SUMMARY" | grep -qE "(Failed|Error): [1-9]"; then
+    echo "[run-tempest] ERROR: Some tests failed"
+    exit 1
+fi
+
+echo "[run-tempest] All tests passed!"
 
 # Save tempest configuration for debugging
 cp etc/tempest.conf "${LOG_DIR}/tempest.conf"

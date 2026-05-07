@@ -188,7 +188,7 @@ EOF
     # Wait for Ironic API to be ready (only on first node)
     if [[ $i -eq 0 ]]; then
         echo "[setup-vbmc] Waiting for Ironic API to be ready..."
-        max_wait=120
+        max_wait=180  # Increased from 120 to 180 seconds
         elapsed=0
         while [[ $elapsed -lt $max_wait ]]; do
             if openstack baremetal driver list &>/dev/null; then
@@ -205,6 +205,19 @@ EOF
             echo "[setup-vbmc] Checking Ironic services..."
             systemctl status devstack@ir-api.service --no-pager || true
             systemctl status devstack@ir-cond.service --no-pager || true
+            echo ""
+            echo "[setup-vbmc] Checking RabbitMQ status..."
+            systemctl status rabbitmq-server --no-pager || true
+            rabbitmqctl status || true
+            echo ""
+            echo "[setup-vbmc] Checking recent Ironic API logs..."
+            journalctl -u devstack@ir-api.service -n 50 --no-pager || true
+            echo ""
+            echo "[setup-vbmc] Checking recent Ironic Conductor logs..."
+            journalctl -u devstack@ir-cond.service -n 50 --no-pager || true
+            echo ""
+            echo "[setup-vbmc] Testing direct API access..."
+            curl -v http://127.0.0.1:6385/ 2>&1 || true
             exit 1
         fi
     fi
