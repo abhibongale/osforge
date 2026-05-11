@@ -85,11 +85,32 @@ if podman exec -u stack "$CONTAINER_NAME" bash -c 'cd /opt/stack/devstack && ./s
 
     echo "===> Tempest plugins installed"
 
+    # Configure RabbitMQ for container environments
+    echo "===> Configuring RabbitMQ for containers..."
+    podman exec "$CONTAINER_NAME" bash -c "mkdir -p /etc/rabbitmq && echo 'NODENAME=rabbit@localhost' > /etc/rabbitmq/rabbitmq-env.conf"
+
+    # Reset RabbitMQ to clean state before stopping
+    # This prevents stale Mnesia database issues on container restart
+    echo "===> Resetting RabbitMQ to clean state..."
+    podman exec "$CONTAINER_NAME" systemctl stop rabbitmq-server || true
+    podman exec "$CONTAINER_NAME" bash -c "rm -rf /var/lib/rabbitmq/mnesia/rabbit@*" || true
+    echo "===> RabbitMQ configured and cleaned"
+
+    # Mask problematic systemd units that fail in containers
+    # These kernel/Swift mounts can't work in containers and put systemd in maintenance mode
+    echo "===> Masking systemd units that fail in containers..."
+    podman exec "$CONTAINER_NAME" systemctl mask \
+        proc-sys-fs-binfmt_misc.automount \
+        sys-kernel-config.mount \
+        sys-kernel-debug.mount \
+        sys-kernel-tracing.mount \
+        opt-stack-data-swift-drives-sdb1.mount || true
+    echo "===> Problematic units masked"
+
     # Stop all services before committing (Option A: services stopped in base image, started at runtime)
-    echo "===> Stopping services before commit..."
+    echo "===> Stopping remaining services before commit..."
     podman exec "$CONTAINER_NAME" systemctl stop 'devstack@*' || true
     podman exec "$CONTAINER_NAME" systemctl stop apache2 || true
-    podman exec "$CONTAINER_NAME" systemctl stop rabbitmq-server || true
     podman exec "$CONTAINER_NAME" systemctl stop mysql || true
     echo "===> Services stopped"
 
