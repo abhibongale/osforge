@@ -273,6 +273,29 @@ EOF
     echo "[setup-vbmc]   Node $NODE_NAME ready (UUID: $NODE_UUID)"
 done
 
+# Create baremetal flavor for Nova
+echo "[setup-vbmc] Creating baremetal flavor..."
+if openstack flavor show baremetal >/dev/null 2>&1; then
+    echo "[setup-vbmc]   Flavor 'baremetal' already exists, deleting..."
+    openstack flavor delete baremetal || true
+fi
+
+# Create the flavor with specs matching our virtual baremetal nodes
+# Use minimal values since we're using custom resource classes
+# Note: Not setting capabilities:boot_mode as it's auto-detected from node firmware
+openstack flavor create \
+    --ram ${IRONIC_VM_SPECS_RAM} \
+    --disk ${IRONIC_VM_SPECS_DISK} \
+    --vcpus ${IRONIC_VM_SPECS_CPU} \
+    --property resources:CUSTOM_BAREMETAL=1 \
+    --property resources:DISK_GB=0 \
+    --property resources:MEMORY_MB=0 \
+    --property resources:VCPU=0 \
+    --property cpu_arch=x86_64 \
+    baremetal
+
+echo "[setup-vbmc]   Flavor 'baremetal' created successfully"
+
 # Verify nodes are available
 echo "[setup-vbmc] Verifying nodes..."
 openstack baremetal node list
