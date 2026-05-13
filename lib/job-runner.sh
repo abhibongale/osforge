@@ -209,6 +209,12 @@ setup_services() {
     if ! container_exec systemctl start --all 'devstack@*'; then
         log_warn "Some DevStack services may not have started"
     fi
+
+    # Reload Apache to ensure it picks up any runtime-generated configs
+    # and recognizes the uWSGI sockets created by DevStack services
+    log_debug "Reloading Apache to ensure proxy configs are active..."
+    container_exec systemctl reload apache2 || true
+
     # Wait longer for services to fully initialize and connect to RabbitMQ
     sleep 30
 
@@ -257,6 +263,26 @@ setup_services() {
         log_error "Keystone API did not become ready in 30 seconds"
         container_exec systemctl status devstack@keystone.service --no-pager || true
         container_exec systemctl status apache2 --no-pager || true
+        return 1
+    fi
+
+    # Verify Ironic API is actually responding (not just service running)
+    log_info "Verifying Ironic API is responding..."
+    local ironic_ready=false
+    for i in {1..30}; do
+        if container_exec bash -c "source /opt/stack/devstack/.stackenv && export OS_AUTH_URL=http://127.0.0.1/identity && export OS_USERNAME=admin && export OS_PASSWORD=secret && export OS_SYSTEM_SCOPE=all && export OS_IDENTITY_API_VERSION=3 && export OS_USER_DOMAIN_NAME=Default && openstack baremetal driver list >/dev/null 2>&1"; then
+            ironic_ready=true
+            log_debug "Ironic API ready after ${i} seconds"
+            break
+        fi
+        sleep 1
+    done
+
+    if [[ "$ironic_ready" != "true" ]]; then
+        log_error "Ironic API did not become ready in 30 seconds"
+        container_exec systemctl status devstack@ir-api.service --no-pager || true
+        container_exec systemctl status apache2 --no-pager || true
+        container_exec bash -c "ss -tlnp | grep -E '6385|:80 '" || true
         return 1
     fi
 
