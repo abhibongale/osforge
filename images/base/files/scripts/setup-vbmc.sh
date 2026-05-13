@@ -187,6 +187,21 @@ EOF
 
     # Wait for Ironic API to be ready (only on first node)
     if [[ $i -eq 0 ]]; then
+        # Ensure Apache is running (it proxies API requests to uWSGI)
+        echo "[setup-vbmc] Checking Apache HTTP proxy..."
+        if ! systemctl is-active --quiet apache2; then
+            echo "[setup-vbmc]   Apache not running, starting it..."
+            systemctl start apache2
+            sleep 3
+        fi
+
+        if systemctl is-active --quiet apache2; then
+            echo "[setup-vbmc]   Apache is running"
+        else
+            echo "[setup-vbmc]   WARNING: Apache failed to start - API may not be accessible"
+            systemctl status apache2 --no-pager || true
+        fi
+
         echo "[setup-vbmc] Waiting for Ironic API to be ready..."
         max_wait=180  # Increased from 120 to 180 seconds
         elapsed=0
@@ -202,6 +217,9 @@ EOF
 
         if [[ $elapsed -ge $max_wait ]]; then
             echo "[setup-vbmc] ERROR: Ironic API not ready after ${max_wait}s"
+            echo "[setup-vbmc] Checking Apache (HTTP proxy)..."
+            systemctl status apache2 --no-pager || true
+            echo ""
             echo "[setup-vbmc] Checking Ironic services..."
             systemctl status devstack@ir-api.service --no-pager || true
             systemctl status devstack@ir-cond.service --no-pager || true
@@ -210,13 +228,19 @@ EOF
             systemctl status rabbitmq-server --no-pager || true
             rabbitmqctl status || true
             echo ""
+            echo "[setup-vbmc] Checking listening ports..."
+            ss -tlnp | grep -E '6385|:80 ' || echo "No services listening on port 6385 or 80"
+            echo ""
+            echo "[setup-vbmc] Checking recent Apache logs..."
+            journalctl -u apache2 -n 30 --no-pager || true
+            echo ""
             echo "[setup-vbmc] Checking recent Ironic API logs..."
-            journalctl -u devstack@ir-api.service -n 50 --no-pager || true
+            journalctl -u devstack@ir-api.service -n 30 --no-pager || true
             echo ""
             echo "[setup-vbmc] Checking recent Ironic Conductor logs..."
-            journalctl -u devstack@ir-cond.service -n 50 --no-pager || true
+            journalctl -u devstack@ir-cond.service -n 30 --no-pager || true
             echo ""
-            echo "[setup-vbmc] Testing direct API access..."
+            echo "[setup-vbmc] Testing direct API access (should be proxied by Apache)..."
             curl -v http://127.0.0.1:6385/ 2>&1 || true
             exit 1
         fi
