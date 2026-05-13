@@ -11,7 +11,50 @@ OSFORGE_VERSION="0.1.0-dev"
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 OSFORGE_ROOT="$(dirname "$SCRIPT_DIR")"
-OSFORGE_LIB="${OSFORGE_LIB:-$OSFORGE_ROOT/lib}"
+
+# Find lib directory (support various installation methods)
+if [[ -n "${OSFORGE_LIB:-}" ]]; then
+    # 1. Use environment variable if set
+    :
+elif [[ -d "$OSFORGE_ROOT/lib" ]]; then
+    # 2. Use relative to script (works for symlinks and source installs)
+    OSFORGE_LIB="$OSFORGE_ROOT/lib"
+else
+    # 3. Search for OSForge installation
+    FOUND_LIB=""
+    for search_dir in \
+        "$HOME/Workspace/osforge" \
+        "$HOME/dev/osforge" \
+        "$HOME/git/osforge" \
+        "$HOME/src/osforge" \
+        "/usr/local/share/osforge" \
+        "/usr/share/osforge"; do
+        if [[ -d "$search_dir/lib" ]] && [[ -f "$search_dir/lib/common.sh" ]]; then
+            FOUND_LIB="$search_dir/lib"
+            OSFORGE_ROOT="$search_dir"
+            break
+        fi
+    done
+
+    if [[ -n "$FOUND_LIB" ]]; then
+        OSFORGE_LIB="$FOUND_LIB"
+    else
+        echo "ERROR: Cannot find OSForge lib directory" >&2
+        echo "Tried:" >&2
+        echo "  - OSFORGE_LIB environment variable" >&2
+        echo "  - $OSFORGE_ROOT/lib" >&2
+        echo "  - Common development locations (~/Workspace, ~/dev, ~/git, ~/src)" >&2
+        echo "  - System installations (/usr/local/share, /usr/share)" >&2
+        echo "" >&2
+        echo "Solutions:" >&2
+        echo "  1. Set OSFORGE_LIB environment variable:" >&2
+        echo "     export OSFORGE_LIB=/path/to/osforge/lib" >&2
+        echo "  2. Reinstall using dev mode:" >&2
+        echo "     cd /path/to/osforge && ./scripts/install.sh --dev" >&2
+        exit 1
+    fi
+fi
+
 OSFORGE_CONFIG="${OSFORGE_CONFIG:-$OSFORGE_ROOT/config}"
 OSFORGE_USER_DIR="${OSFORGE_USER_DIR:-$HOME/.osforge}"
 
