@@ -299,6 +299,14 @@ done
 
 # Create baremetal flavor for Nova
 echo "[setup-vbmc] Creating baremetal flavor..."
+
+# Nova operations require project scope, not system scope
+# Temporarily switch from system-scoped to project-scoped credentials
+echo "[setup-vbmc]   Switching to project-scoped credentials for Nova operations..."
+unset OS_SYSTEM_SCOPE
+export OS_PROJECT_NAME=admin
+export OS_PROJECT_DOMAIN_NAME=Default
+
 if openstack flavor show baremetal >/dev/null 2>&1; then
     echo "[setup-vbmc]   Flavor 'baremetal' already exists, deleting..."
     openstack flavor delete baremetal || true
@@ -307,7 +315,9 @@ fi
 # Create the flavor with specs matching our virtual baremetal nodes
 # Use minimal values since we're using custom resource classes
 # Note: Not setting capabilities:boot_mode as it's auto-detected from node firmware
+# Make it public so Tempest's dynamically created projects can use it
 openstack flavor create \
+    --public \
     --ram ${IRONIC_VM_SPECS_RAM} \
     --disk ${IRONIC_VM_SPECS_DISK} \
     --vcpus ${IRONIC_VM_SPECS_CPU} \
@@ -319,6 +329,11 @@ openstack flavor create \
     baremetal
 
 echo "[setup-vbmc]   Flavor 'baremetal' created successfully"
+
+# Verify flavor is visible and public
+echo "[setup-vbmc]   Verifying flavor visibility..."
+openstack flavor show baremetal -f value -c name -c "OS-FLV-EXT-DATA:ephemeral" || echo "WARNING: Flavor not visible!"
+openstack flavor list --all | grep baremetal || echo "WARNING: Flavor not in list!"
 
 # Verify nodes are available
 echo "[setup-vbmc] Verifying nodes..."
