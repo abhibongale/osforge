@@ -300,6 +300,19 @@ osforge --help
 osforge list-jobs
 ```
 
+### Development Mode
+
+Test script changes without rebuilding the image:
+
+```bash
+# Enable dev mode for script development
+osforge run ironic-tempest-bios-ipmi-autodetect --dev-mode
+
+# Your local scripts (setup-vbmc.sh, run-tempest.sh, etc.) will override image scripts
+```
+
+This allows rapid iteration (~1 minute per test) instead of waiting 45-60 minutes for image rebuilds. See [docs/development-workflow.md](docs/development-workflow.md) for details.
+
 ## Architecture
 
 OSForge uses pre-built container images with DevStack + Ironic installed. Your local code is mounted as a volume, services are restarted, and tests run - all in ~20 minutes.

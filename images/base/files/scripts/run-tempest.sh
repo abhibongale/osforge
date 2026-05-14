@@ -43,6 +43,10 @@ echo "[run-tempest]   Regex: $TEST_REGEX"
 echo "[run-tempest]   Concurrency: $TEST_CONCURRENCY"
 echo "[run-tempest]   Timeout: $TEST_TIMEOUT seconds"
 
+# Activate virtualenv first (stestr and openstack commands need it)
+echo "[run-tempest] Activating Python virtualenv..."
+source /opt/stack/data/venv/bin/activate
+
 # Initialize stestr repository (Zuul's run-tempest role does this)
 echo "[run-tempest] Initializing stestr repository..."
 rm -rf .testrepository .stestr 2>/dev/null || true
@@ -54,15 +58,19 @@ mkdir -p etc
 # Configure tempest
 echo "[run-tempest] Configuring tempest..."
 
-# Activate virtualenv for OpenStack commands
-source /opt/stack/data/venv/bin/activate
-
 # Get dynamic values
 IMAGE_ID=$(openstack image list -f value -c ID 2>/dev/null | head -1)
 PUBLIC_NETWORK_ID=$(openstack network list --external -f value -c ID 2>/dev/null | head -1)
 
+# Get baremetal flavor UUID (must use project-scoped credentials)
+unset OS_SYSTEM_SCOPE
+export OS_PROJECT_NAME=admin
+export OS_PROJECT_DOMAIN_NAME=Default
+FLAVOR_ID=$(openstack flavor show baremetal -f value -c id 2>/dev/null)
+
 echo "[run-tempest] Using image: $IMAGE_ID"
 echo "[run-tempest] Using public network: $PUBLIC_NETWORK_ID"
+echo "[run-tempest] Using flavor: $FLAVOR_ID (baremetal)"
 
 # Create or update tempest.conf
 cat > etc/tempest.conf <<EOF
@@ -91,7 +99,7 @@ api_v3 = true
 [compute]
 image_ref = ${IMAGE_ID}
 image_ref_alt = ${IMAGE_ID}
-flavor_ref = baremetal
+flavor_ref = ${FLAVOR_ID}
 min_compute_nodes = 1
 max_microversion = latest
 

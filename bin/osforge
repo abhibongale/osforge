@@ -142,6 +142,7 @@ cmd_run() {
     local verbose=false
     local keep=false
     local no_pull=false
+    local dev_mode=false
 
     # Parse arguments
     while [[ $# -gt 0 ]]; do
@@ -198,6 +199,10 @@ cmd_run() {
                 no_pull=true
                 shift
                 ;;
+            --dev-mode)
+                dev_mode=true
+                shift
+                ;;
             -*)
                 log_error "Unknown option: $1"
                 exit 1
@@ -230,6 +235,11 @@ cmd_run() {
     if [[ -z "$itp_repo" ]] && [[ -f "setup.cfg" ]] && grep -q "ironic-tempest-plugin" setup.cfg 2>/dev/null; then
         itp_repo="$(pwd)"
         log_info "Auto-detected Ironic Tempest Plugin repo: $itp_repo"
+    fi
+
+    # Enable development mode if requested
+    if [[ "$dev_mode" == "true" ]]; then
+        export OSFORGE_DEV_MODE=true
     fi
 
     # Run the job
@@ -480,6 +490,7 @@ RUN OPTIONS:
     --verbose                  Enable verbose output
     --keep                     Keep container running after test
     --no-pull                  Don't pull base image before run
+    --dev-mode                 Mount local scripts for rapid iteration (see docs/development-workflow.md)
 
 BUILD OPTIONS:
     --deps                     Build base image with dependencies only (~10-15 min)
@@ -523,6 +534,9 @@ EXAMPLES:
 
     # Use custom base image tag
     osforge run ironic-tempest-bios-ipmi-autodetect --tag alpha
+
+    # Test script changes without rebuilding image (dev mode)
+    osforge run ironic-tempest-bios-ipmi-autodetect --dev-mode
 
     # Build base image (dependencies only)
     osforge build --deps

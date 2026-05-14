@@ -76,6 +76,32 @@ container_start() {
     # Mount cache
     mount_args+=(-v "$OSFORGE_USER_DIR/cache:/opt/stack/cache:rw")
 
+    # Development Mode: Mount local scripts to override image scripts
+    # When OSFORGE_DEV_MODE=true, local scripts from images/base/files/scripts/
+    # are mounted to /usr/local/bin/ in the container, allowing rapid iteration
+    # without rebuilding the container image.
+    #
+    # Use case: When developing or debugging scripts (setup-vbmc.sh, run-tempest.sh),
+    # you can edit them locally and test immediately. The container will use your
+    # local version instead of the version baked into the image.
+    #
+    # Enable: OSFORGE_DEV_MODE=true osforge run <job>
+    # See: docs/development-workflow.md for complete guide
+    if [[ "${OSFORGE_DEV_MODE:-false}" == "true" ]] && [[ -d "$OSFORGE_ROOT/images/base/files/scripts" ]]; then
+        log_info "Development mode enabled - mounting local scripts"
+        # Mount individual scripts to avoid overriding entire /usr/local/bin/
+        # This preserves other binaries in the container while overriding specific scripts
+        for script in "$OSFORGE_ROOT/images/base/files/scripts"/*.sh; do
+            if [[ -f "$script" ]]; then
+                local script_name=$(basename "$script")
+                mount_args+=(-v "$script:/usr/local/bin/$script_name:ro")
+                log_debug "  Mounting: $script_name"
+            fi
+        done
+    else
+        log_debug "Development mode disabled - using image scripts"
+    fi
+
     # Start container
     log_info "Starting container: $container_name"
 

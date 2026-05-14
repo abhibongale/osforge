@@ -78,6 +78,40 @@ vim lib/container.sh
 osforge run ironic-tempest-bios-ipmi-autodetect
 ```
 
+### Development Mode (Rapid Iteration)
+
+When working on scripts in `images/base/files/scripts/`, use development mode to test changes without rebuilding the container image:
+
+```bash
+# Enable development mode (recommended)
+osforge run <job> --dev-mode
+
+# Alternative: Use environment variable
+OSFORGE_DEV_MODE=true osforge run <job>
+
+# Your local scripts will be mounted and used instead of image scripts
+```
+
+**What gets mounted:**
+- `setup-vbmc.sh` - Virtual baremetal node setup
+- `run-tempest.sh` - Tempest test execution
+- Other scripts in `images/base/files/scripts/`
+
+**Example workflow:**
+```bash
+# 1. Make changes to a script
+vim images/base/files/scripts/setup-vbmc.sh
+
+# 2. Test immediately with dev mode (no image rebuild needed)
+osforge run ironic-tempest-bios-ipmi-autodetect --dev-mode
+
+# 3. Iterate until working
+# 4. Rebuild image for production testing
+cd images/base && ./build.sh
+```
+
+**See:** [docs/development-workflow.md](docs/development-workflow.md) for complete guide, examples, and troubleshooting.
+
 ## Project Structure
 
 ```
