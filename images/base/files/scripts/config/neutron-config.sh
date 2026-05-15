@@ -22,6 +22,7 @@ generate_neutron_tempest_config() {
 public_network_id = ${TEMPEST_PUBLIC_NETWORK_ID}
 default_network = ${TEMPEST_PROVISION_NETWORK_ID}
 project_networks_reachable = false
+shared_physical_network = true
 
 [network-feature-enabled]
 ipv6 = false

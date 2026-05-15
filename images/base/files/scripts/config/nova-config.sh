@@ -19,6 +19,7 @@ generate_nova_tempest_config() {
 image_ref = ${TEMPEST_IMAGE_ID}
 image_ref_alt = ${TEMPEST_IMAGE_ID}
 flavor_ref = ${TEMPEST_FLAVOR_ID}
+fixed_network_name = ironic-provision
 min_compute_nodes = 1
 max_microversion = latest
 
@@ -27,5 +28,6 @@ console_output = false
 rescue = false
 resize = false
 suspend = false
+interface_attach = false
 EOF
 }

@@ -6,6 +6,14 @@ set -eo pipefail
 
 echo "[setup-vbmc] Setting up virtual baremetal node..."
 
+# Setup IPA images first (required for deployment)
+if [[ -f /usr/local/bin/setup-ipa-images.sh ]]; then
+    /usr/local/bin/setup-ipa-images.sh || {
+        echo "[setup-vbmc] ERROR: Failed to setup IPA images"
+        exit 1
+    }
+fi
+
 # Get HOST_IP from DevStack configuration
 if [[ -f /opt/stack/devstack/.stackenv ]]; then
     source /opt/stack/devstack/.stackenv
@@ -38,6 +46,14 @@ VBMC_CONFIG_DIR="/root/.vbmc"
 # Ensure directories exist
 mkdir -p "$LIBVIRT_DIR"
 mkdir -p "$VBMC_CONFIG_DIR"
+
+# Configure libvirt for container environment
+if [[ -f /usr/local/bin/configure-libvirt.sh ]]; then
+    /usr/local/bin/configure-libvirt.sh || {
+        echo "[setup-vbmc] ERROR: Failed to configure libvirt"
+        exit 1
+    }
+fi
 
 # Start libvirtd
 echo "[setup-vbmc] Starting libvirtd..."
@@ -81,6 +97,29 @@ if ! vbmc list &>/dev/null; then
     ps aux | grep vbmc || true
     exit 1
 fi
+
+# Clean up all existing VirtualBMC nodes (from previous runs)
+# This prevents port conflicts when we create new nodes
+echo "[setup-vbmc] Cleaning up existing VirtualBMC nodes..."
+vbmc list --format value -c "Domain name" 2>/dev/null | while read -r domain; do
+    if [[ -n "$domain" ]]; then
+        echo "[setup-vbmc]   Removing stale node: $domain"
+        vbmc stop "$domain" 2>/dev/null || true
+        vbmc delete "$domain" 2>/dev/null || true
+    fi
+done
+echo "[setup-vbmc]   Cleanup complete"
+
+# Clean up all existing Ironic baremetal nodes (from previous runs)
+# This prevents resource conflicts and stale Placement providers
+echo "[setup-vbmc] Cleaning up existing Ironic baremetal nodes..."
+openstack baremetal node list -f value -c UUID 2>/dev/null | while read -r node_uuid; do
+    if [[ -n "$node_uuid" ]]; then
+        echo "[setup-vbmc]   Deleting stale node: $node_uuid"
+        openstack baremetal node delete "$node_uuid" 2>/dev/null || true
+    fi
+done
+echo "[setup-vbmc]   Cleanup complete"
 
 # Create virtual baremetal nodes
 for i in $(seq 0 $((IRONIC_VM_COUNT - 1))); do
@@ -264,8 +303,8 @@ EOF
         --driver-info ipmi_port="$VBMC_PORT" \
         --driver-info ipmi_username=admin \
         --driver-info ipmi_password=password \
-        --driver-info deploy_kernel=http://${SERVICE_HOST}/ipa-kernel \
-        --driver-info deploy_ramdisk=http://${SERVICE_HOST}/ipa-ramdisk \
+        --driver-info deploy_kernel=http://${SERVICE_HOST}:3928/ipa-kernel \
+        --driver-info deploy_ramdisk=http://${SERVICE_HOST}:3928/ipa-ramdisk \
         --property cpus="$IRONIC_VM_SPECS_CPU" \
         --property memory_mb="$IRONIC_VM_SPECS_RAM" \
         --property local_gb="$IRONIC_VM_SPECS_DISK" \
@@ -297,15 +336,26 @@ EOF
     echo "[setup-vbmc]   Node $NODE_NAME ready (UUID: $NODE_UUID)"
 done
 
+# Make ironic-provision network shared for Tempest dynamic credentials
+# Dynamic credentials create new test projects that need access to this network
+echo "[setup-vbmc] Configuring ironic-provision network..."
+unset OS_SYSTEM_SCOPE
+export OS_PROJECT_NAME=admin
+export OS_PROJECT_DOMAIN_NAME=Default
+
+if openstack network show ironic-provision >/dev/null 2>&1; then
+    echo "[setup-vbmc]   Making ironic-provision network shared..."
+    openstack network set --share ironic-provision
+    echo "[setup-vbmc]   ironic-provision network is now shared across all projects"
+else
+    echo "[setup-vbmc]   WARNING: ironic-provision network not found, skipping share configuration"
+fi
+
 # Create baremetal flavor for Nova
 echo "[setup-vbmc] Creating baremetal flavor..."
 
 # Nova operations require project scope, not system scope
-# Temporarily switch from system-scoped to project-scoped credentials
-echo "[setup-vbmc]   Switching to project-scoped credentials for Nova operations..."
-unset OS_SYSTEM_SCOPE
-export OS_PROJECT_NAME=admin
-export OS_PROJECT_DOMAIN_NAME=Default
+echo "[setup-vbmc]   Using project-scoped credentials for Nova operations..."
 
 if openstack flavor show baremetal >/dev/null 2>&1; then
     echo "[setup-vbmc]   Flavor 'baremetal' already exists, deleting..."
@@ -335,6 +385,11 @@ echo "[setup-vbmc]   Verifying flavor visibility..."
 openstack flavor show baremetal -f value -c name -c "OS-FLV-EXT-DATA:ephemeral" || echo "WARNING: Flavor not visible!"
 openstack flavor list --all | grep baremetal || echo "WARNING: Flavor not in list!"
 
+# Switch back to system scope for Ironic operations
+export OS_SYSTEM_SCOPE=all
+unset OS_PROJECT_NAME
+unset OS_PROJECT_DOMAIN_NAME
+
 # Verify nodes are available
 echo "[setup-vbmc] Verifying nodes..."
 openstack baremetal node list
@@ -344,4 +399,65 @@ echo "[setup-vbmc] VirtualBMC status:"
 vbmc list
 
 echo "[setup-vbmc] VirtualBMC setup complete - $IRONIC_VM_COUNT node(s) ready"
+
+# Discover and map compute hosts to Nova cells
+# This is required for Nova scheduler to find the compute hosts
+echo "[setup-vbmc] Waiting for Nova compute service to fully register (10 seconds)..."
+sleep 10
+echo "[setup-vbmc] Discovering compute hosts for Nova cells..."
+cd /opt/stack/nova && su -s /bin/bash stack -c "nova-manage cell_v2 discover_hosts --verbose 2>&1" || echo "  WARNING: Cell discovery failed"
+echo "[setup-vbmc] Compute host discovery complete"
+
+# CRITICAL FIX: Restart Nova compute to force resource provider refresh
+# Nova compute needs to re-scan Ironic nodes and register them in Placement
+# Without this, the nodes won't appear as available resources for scheduling
+echo "[setup-vbmc] Restarting Nova compute to refresh resource providers..."
+systemctl restart devstack@n-cpu.service
+sleep 10
+
+# Wait for Nova compute to re-register with updated inventory
+echo "[setup-vbmc] Waiting for Nova compute to update Placement (30 seconds)..."
+sleep 30
+
+# Debug Nova/Placement integration
+echo "[setup-vbmc] ====== DEBUG: Nova/Placement Integration ======"
+
+echo "[setup-vbmc] Nova compute service status:"
+systemctl is-active devstack@n-cpu.service && echo "  RUNNING" || echo "  NOT RUNNING!"
+
+echo "[setup-vbmc] Placement resource providers:"
+openstack resource provider list -f value -c uuid -c name 2>/dev/null || echo "  ERROR: Could not list providers"
+
+echo "[setup-vbmc] Nova compute services:"
+openstack compute service list -f value -c Binary -c Host -c Status 2>/dev/null || echo "  ERROR: Could not list services"
+
+echo "[setup-vbmc] Checking if node is in Placement:"
+NODE_UUID=$(openstack baremetal node list -f value -c UUID 2>/dev/null | head -1)
+if [[ -n "$NODE_UUID" ]]; then
+    echo "  Node UUID: $NODE_UUID"
+    if openstack resource provider list -f value -c uuid 2>/dev/null | grep -q "$NODE_UUID"; then
+        echo "  ✓ Node IS registered in Placement"
+        # Show the node's inventory
+        echo "[setup-vbmc] Node inventory in Placement:"
+        openstack resource provider inventory list "$NODE_UUID" -f table 2>/dev/null | sed 's/^/  /'
+    else
+        echo "  ✗ Node NOT in Placement - provisioning will FAIL!"
+        echo "  This means Nova compute didn't pick up the Ironic node."
+        echo "  Check: journalctl -u devstack@n-cpu.service -n 100"
+    fi
+fi
+
+# Verify resource providers have inventory
+echo "[setup-vbmc] Verifying resource providers have inventory..."
+PROVIDERS_WITH_INVENTORY=0
+openstack resource provider list -f value -c uuid 2>/dev/null | while read -r provider_uuid; do
+    INVENTORY_COUNT=$(openstack resource provider inventory list "$provider_uuid" -f value 2>/dev/null | wc -l)
+    if [[ $INVENTORY_COUNT -gt 0 ]]; then
+        echo "  ✓ Provider $provider_uuid has $INVENTORY_COUNT resource class(es)"
+        PROVIDERS_WITH_INVENTORY=$((PROVIDERS_WITH_INVENTORY + 1))
+    else
+        echo "  ✗ Provider $provider_uuid has NO inventory"
+    fi
+done
+
 exit 0

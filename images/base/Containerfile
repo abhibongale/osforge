@@ -36,8 +36,12 @@ RUN apt-get update && \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install VirtualBMC
+# Install VirtualBMC (keep for backwards compatibility with IPMI jobs)
 RUN pip3 install --break-system-packages virtualbmc
+
+# Install Sushy-Tools for Redfish emulation (container-native alternative)
+# Provides BMC emulation without libvirt device ownership issues
+RUN pip3 install --break-system-packages sushy-tools
 
 # Install and patch openvswitch for userspace mode
 # Install openvswitch-switch early so we can patch ovs-kmod-ctl before services start
@@ -103,11 +107,19 @@ RUN mkdir -p /opt/stack/{logs,images,cache}
 USER root
 
 # Copy helper scripts
+COPY --chmod=755 files/scripts/configure-libvirt.sh /usr/local/bin/
 COPY --chmod=755 files/scripts/setup-services.sh /usr/local/bin/
+COPY --chmod=755 files/scripts/setup-ipa-images.sh /usr/local/bin/
 COPY --chmod=755 files/scripts/setup-vbmc.sh /usr/local/bin/
+COPY --chmod=755 files/scripts/setup-sushy.sh /usr/local/bin/
 COPY --chmod=755 files/scripts/run-tempest.sh /usr/local/bin/
 COPY --chmod=755 files/scripts/health-check.sh /usr/local/bin/
 COPY --chmod=755 files/scripts/checkout-branch.sh /usr/local/bin/
+COPY --chmod=755 files/scripts/debug-placement.sh /usr/local/bin/
+COPY --chmod=755 files/scripts/fix-placement-providers.sh /usr/local/bin/
+
+# Copy component configuration scripts
+COPY --chmod=755 files/scripts/config /usr/local/bin/config
 
 # Copy entrypoint
 COPY --chmod=755 entrypoint.sh /usr/local/bin/osforge-entrypoint.sh

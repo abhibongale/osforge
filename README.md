@@ -86,11 +86,30 @@ osforge run ironic-tempest-bios-ipmi-autodetect \
 
 ## Supported Jobs
 
-Currently supports:
+### Redfish Jobs (Recommended for Containers)
+
+- `ironic-tempest-bios-redfish-autodetect` - **Recommended**: BIOS + Redfish + auto-detect deployment
+
+**Why Redfish?**
+- ✅ Container-native (no libvirt device ownership issues)
+- ✅ Modern HTTP REST API (easier debugging with curl)
+- ✅ More reliable in containerized environments
+- ✅ Industry standard (supported by Dell, HPE, Lenovo, etc.)
+
+### IPMI Jobs (Legacy/CI Parity)
+
 - `ironic-tempest-bios-ipmi-autodetect` - BIOS + IPMI + auto-detect deployment
 
+**Why IPMI?**
+- ✅ Matches upstream OpenStack CI behavior
+- ✅ Tests IPMI driver specifically
+- ⚠️ May encounter libvirt permission issues in containers
+- ⚠️ Legacy protocol (being phased out in industry)
+
+**See:** [BMC Migration Guide](docs/ironic-bmc-migration-guide.md) for detailed comparison and troubleshooting.
+
 Coming soon:
-- More Ironic jobs (UEFI, Redfish, etc.)
+- More Ironic jobs (UEFI variants, etc.)
 - Other OpenStack projects (Nova, Tempest, Neutron)
 
 ## Requirements
@@ -461,13 +480,19 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ---
 
-## Related Documentation
+## Documentation
 
-**Obsidian Documentation** (if you have access):
-- Quick Start: `/home/abongale/Dropbox/Obsidian/RESOURCE/OSFORGE/1-Getting-Started/Quick-Start.md`
-- Architecture Plan: `.../4-Development/Architecture-Plan.md`
-- Container Build Implementation: `.../4-Development/Container-Build-Implementation.md`
-- Usage Workflow: `.../2-Usage-Guides/Usage-Workflow.md`
+### Project Documentation
+
+- **[Building the Base Image](docs/building-base-image.md)** - Step-by-step guide for container image creation
+- **[Development Workflow](docs/development-workflow.md)** - Rapid iteration with dev mode
+- **[BMC Migration Guide](docs/ironic-bmc-migration-guide.md)** - ⭐ IPMI to Redfish migration, troubleshooting, and architecture deep-dive
+- **[Repository Locations](docs/repository-locations.md)** - Configuring and locating OpenStack repositories
+- **[Multi-Deployment Architecture](docs/multi-deployment-architecture.md)** - Support for multiple deployment types
+- **[Deployment Methods Comparison](docs/deployment-methods-comparison.md)** - DevStack, Kolla-Ansible, and Bifrost
+- **[Stable Branches](docs/stable-branches.md)** - Testing against specific OpenStack releases
+
+### Additional Resources
 
 **GitHub Issues:**
 - [#4](https://github.com/abhibongale/osforge/issues/4) - Architecture deviation discussion (resolved with Option A)

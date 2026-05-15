@@ -20,6 +20,7 @@ generate_auth_tempest_config() {
     cat <<EOF
 [auth]
 use_dynamic_credentials = true
+create_isolated_networks = false
 admin_username = admin
 admin_password = secret
 admin_project_name = admin
