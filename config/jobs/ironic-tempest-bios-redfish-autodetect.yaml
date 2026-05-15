@@ -1,0 +1,77 @@
+name: ironic-tempest-bios-redfish-autodetect
+description: "Test Ironic with BIOS boot mode, Redfish, and auto-detect deployment interface (Recommended for containers)"
+parent: ironic-base
+
+# Container configuration
+container:
+  privileged: true
+  devices:
+    - /dev/kvm
+  capabilities:
+    - SYS_ADMIN
+  memory: 8G
+  cpus: 4
+
+# Volume mounts
+mounts:
+  ironic:
+    source: auto  # Auto-detect or use --ironic-repo
+    target: /opt/stack/ironic
+    type: bind
+
+# Environment variables for this job
+env:
+  # Use Sushy-Tools (Redfish) instead of VirtualBMC (IPMI)
+  # This is the container-native BMC emulator that doesn't have libvirt permission issues
+  IRONIC_BMC_EMULATOR: sushy
+  SUSHY_EMULATOR_PORT: 8000
+
+  # Ironic driver configuration for Redfish
+  IRONIC_TEMPEST_DRIVER: redfish
+  IRONIC_TEMPEST_ENABLED_DRIVERS: "ipmi,redfish"
+
+  # Deployment interface (same as IPMI job)
+  IRONIC_DEFAULT_DEPLOY_INTERFACE: autodetect
+  IRONIC_ENABLED_DEPLOY_INTERFACES: "autodetect,bootc,direct"
+  IRONIC_AUTODETECT_DEPLOY_INTERFACES: "bootc,direct"
+  IRONIC_DEFAULT_RESCUE_INTERFACE: agent
+  IRONIC_ENABLED_RESCUE_INTERFACES: "fake,agent,no-rescue"
+  IRONIC_TEMPEST_WHOLE_DISK_IMAGE: "True"
+  IRONIC_VM_EPHEMERAL_DISK: "0"
+
+  # Swift and VM configuration
+  SWIFT_ENABLE_TEMPURLS: "True"
+  SWIFT_TEMPURL_KEY: secretkey
+  IRONIC_BOOT_MODE: bios
+  IRONIC_VM_COUNT: "1"
+
+# DevStack configuration overrides
+devstack:
+  localrc:
+    IRONIC_TEMPEST_WHOLE_DISK_IMAGE: True
+    IRONIC_VM_EPHEMERAL_DISK: 0
+    IRONIC_ENABLED_HARDWARE_TYPES: ipmi,redfish
+    IRONIC_DEFAULT_HARDWARE_TYPE: redfish
+  services:
+    enabled:
+      - atop
+      - s-account
+      - s-container
+      - s-object
+      - s-proxy
+    disabled: []
+
+# Test execution
+test:
+  framework: tempest
+  # Matches Zuul job definition - partial regex matching the test method name
+  # This will match: ironic_tempest_plugin.tests.scenario.test_baremetal_basic_ops.BaremetalBasicOps.test_baremetal_server_ops_wholedisk_image
+  regex: test_baremetal_server_ops_wholedisk_image
+  concurrency: 1
+  timeout: 2600
+
+# Resource requirements
+resources:
+  memory: 8G
+  cpus: 4
+  disk: 20G

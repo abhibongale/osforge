@@ -15,15 +15,19 @@ if [[ -f /opt/stack/devstack/.stackenv ]]; then
     source /opt/stack/devstack/.stackenv
 fi
 
-# Set OpenStack credentials (required for tempest config generation)
-export OS_AUTH_URL=http://${SERVICE_HOST:-127.0.0.1}/identity
-export OS_PROJECT_NAME=admin
-export OS_USERNAME=admin
-export OS_PASSWORD=secret
-export OS_REGION_NAME=RegionOne
-export OS_IDENTITY_API_VERSION=3
-export OS_USER_DOMAIN_NAME=Default
-export OS_PROJECT_DOMAIN_NAME=Default
+# Source component configuration scripts
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+CONFIG_DIR="$SCRIPT_DIR/config"
+
+source "$CONFIG_DIR/auth-config.sh"
+source "$CONFIG_DIR/glance-config.sh"
+source "$CONFIG_DIR/nova-config.sh"
+source "$CONFIG_DIR/neutron-config.sh"
+source "$CONFIG_DIR/ironic-config.sh"
+source "$CONFIG_DIR/swift-config.sh"
+
+# Set up OpenStack authentication
+set_auth_credentials
 
 echo "[run-tempest] Using SERVICE_HOST: ${SERVICE_HOST:-127.0.0.1}"
 
@@ -58,77 +62,33 @@ mkdir -p etc
 # Configure tempest
 echo "[run-tempest] Configuring tempest..."
 
-# Get dynamic values
-IMAGE_ID=$(openstack image list -f value -c ID 2>/dev/null | head -1)
-PUBLIC_NETWORK_ID=$(openstack network list --external -f value -c ID 2>/dev/null | head -1)
+# Activate virtualenv for OpenStack commands
+source /opt/stack/data/venv/bin/activate
 
-# Get baremetal flavor UUID (must use project-scoped credentials)
-unset OS_SYSTEM_SCOPE
-export OS_PROJECT_NAME=admin
-export OS_PROJECT_DOMAIN_NAME=Default
-FLAVOR_ID=$(openstack flavor show baremetal -f value -c id 2>/dev/null)
+# Get component-specific configurations
+echo "[run-tempest] Retrieving component configurations..."
+get_glance_config
+get_nova_config
+get_neutron_config
+get_ironic_config
 
-echo "[run-tempest] Using image: $IMAGE_ID"
-echo "[run-tempest] Using public network: $PUBLIC_NETWORK_ID"
-echo "[run-tempest] Using flavor: $FLAVOR_ID (baremetal)"
-
-# Create or update tempest.conf
+# Generate tempest.conf from component configurations
 cat > etc/tempest.conf <<EOF
 [DEFAULT]
 debug = true
 log_file = ${LOG_DIR}/tempest.log
 
-[auth]
-use_dynamic_credentials = true
-admin_username = admin
-admin_password = secret
-admin_project_name = admin
-admin_domain_name = Default
+$(generate_auth_tempest_config)
 
-[identity]
-uri = http://${SERVICE_HOST}/identity
-uri_v3 = http://${SERVICE_HOST}/identity/v3
-auth_version = v3
-region = RegionOne
-v3_endpoint_type = public
+$(generate_nova_tempest_config)
 
-[identity-feature-enabled]
-api_v2 = false
-api_v3 = true
-
-[compute]
-image_ref = ${IMAGE_ID}
-image_ref_alt = ${IMAGE_ID}
-flavor_ref = ${FLAVOR_ID}
-min_compute_nodes = 1
-max_microversion = latest
-
-[compute-feature-enabled]
-console_output = false
-rescue = false
-resize = false
-suspend = false
-
-[network]
-public_network_id = ${PUBLIC_NETWORK_ID}
-project_networks_reachable = false
-
-[network-feature-enabled]
-ipv6 = false
+$(generate_neutron_tempest_config)
 
 [validation]
 run_validation = false
 connect_method = fixed
 
-[baremetal]
-driver = ipmi
-enabled_drivers = ipmi
-min_microversion = 1.1
-max_microversion = latest
-deployment_timeout = 900
-
-[baremetal-feature-enabled]
-adoption = false
+$(generate_ironic_tempest_config)
 
 [service_available]
 cinder = false
@@ -138,15 +98,7 @@ nova = true
 swift = true
 ironic = true
 
-[object-storage]
-operator_role = Member
-reseller_admin_role = ResellerAdmin
-
-[object-storage-feature-enabled]
-discoverability = true
-container_sync = false
-object_versioning = true
-bulk_upload = true
+$(generate_swift_tempest_config)
 EOF
 
 # Create log directory
