@@ -185,6 +185,12 @@ setup_services() {
     log_info "Configuring RabbitMQ users..."
     container_exec bash -c "rabbitmqctl add_user stackrabbit secret 2>/dev/null || rabbitmqctl change_password stackrabbit secret"
     container_exec bash -c "rabbitmqctl set_permissions -p / stackrabbit '.*' '.*' '.*'"
+
+    # Create Nova cells vhost (required for Nova compute service)
+    log_debug "Creating nova_cell1 vhost for Nova cells..."
+    container_exec bash -c "rabbitmqctl add_vhost nova_cell1 2>/dev/null || true"
+    container_exec bash -c "rabbitmqctl set_permissions -p nova_cell1 stackrabbit '.*' '.*' '.*'"
+
     log_success "RabbitMQ started and configured"
 
     # Start Apache (HTTP proxy for Keystone and other OpenStack APIs)
@@ -240,6 +246,27 @@ setup_services() {
     if ! container_exec systemctl is-active --quiet apache2; then
         log_error "Apache not running"
         services_ok=false
+    fi
+
+    # Verify Nova compute service is running (critical for Ironic + Placement)
+    if container_exec systemctl list-unit-files | grep -q "devstack@n-cpu.service"; then
+        if ! container_exec systemctl is-active --quiet devstack@n-cpu.service; then
+            log_warn "Nova compute not running, attempting to start..."
+            if container_exec systemctl start devstack@n-cpu.service; then
+                sleep 5
+                if container_exec systemctl is-active --quiet devstack@n-cpu.service; then
+                    log_success "Nova compute started successfully"
+                else
+                    log_error "Nova compute failed to start (required for Placement integration)"
+                    services_ok=false
+                fi
+            else
+                log_error "Failed to start Nova compute service"
+                services_ok=false
+            fi
+        fi
+    else
+        log_warn "Nova compute service not found (may not be enabled in DevStack config)"
     fi
 
     if [[ "$services_ok" != "true" ]]; then
@@ -426,6 +453,8 @@ setup_vbmc() {
 
     # Extract environment variables from job config
     local env_vars=""
+    local bmc_emulator="vbmc"  # Default to IPMI/VirtualBMC
+
     if grep -q "^env:" "$job_file"; then
         # Read env section from YAML and convert to bash exports
         while IFS=: read -r key value; do
@@ -438,14 +467,33 @@ setup_vbmc() {
             value=$(echo "$value" | xargs | sed 's/"//g' | sed "s/'//g")
             if [[ -n "$key" ]] && [[ -n "$value" ]]; then
                 env_vars="$env_vars -e ${key}=${value}"
+
+                # Extract BMC emulator type from job config
+                if [[ "$key" == "IRONIC_BMC_EMULATOR" ]]; then
+                    bmc_emulator="$value"
+                fi
             fi
         done < <(sed -n '/^env:/,/^[a-z]/p' "$job_file" | grep -v "^#" | head -n -1)
     fi
 
-    # Call setup-vbmc.sh script in container with environment variables
-    container_exec bash -c "export IRONIC_VM_COUNT=${IRONIC_VM_COUNT:-1} && /usr/local/bin/setup-vbmc.sh" || return 1
+    # Determine which BMC emulator to use based on job configuration
+    log_debug "BMC Emulator detected from job config: $bmc_emulator"
 
-    log_success "VirtualBMC setup complete"
+    if [[ "$bmc_emulator" == "sushy" ]]; then
+        log_info "Using Sushy-Tools (Redfish) for BMC emulation"
+        if ! container_exec bash -c "export IRONIC_VM_COUNT=${IRONIC_VM_COUNT:-1} && /usr/local/bin/setup-sushy.sh"; then
+            log_error "Failed to setup Sushy-Tools"
+            return 1
+        fi
+    else
+        log_info "Using VirtualBMC (IPMI) for BMC emulation"
+        if ! container_exec bash -c "export IRONIC_VM_COUNT=${IRONIC_VM_COUNT:-1} && /usr/local/bin/setup-vbmc.sh"; then
+            log_error "Failed to setup VirtualBMC"
+            return 1
+        fi
+    fi
+
+    log_success "Baremetal management setup complete (using ${bmc_emulator})"
     return 0
 }
 

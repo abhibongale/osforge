@@ -1,15 +1,24 @@
 #!/bin/bash
-# Setup VirtualBMC for simulating IPMI
+# Setup Sushy-Tools for simulating Redfish BMC
 # This script runs inside the container
+# Container-native alternative to VirtualBMC (which has libvirt permission issues)
 
 set -eo pipefail
 
-echo "[setup-vbmc] Setting up virtual baremetal node..."
+echo "[setup-sushy] Setting up virtual baremetal node with Redfish..."
+
+# Check if sushy-tools is installed, install if missing (for dev mode)
+if ! command -v sushy-emulator &> /dev/null; then
+    echo "[setup-sushy] Sushy-Tools not found, installing..."
+    # Use --ignore-installed to avoid conflicts with system packages
+    pip3 install --break-system-packages --ignore-installed blinker sushy-tools
+    echo "[setup-sushy] Sushy-Tools installed successfully"
+fi
 
 # Setup IPA images first (required for deployment)
 if [[ -f /usr/local/bin/setup-ipa-images.sh ]]; then
     /usr/local/bin/setup-ipa-images.sh || {
-        echo "[setup-vbmc] ERROR: Failed to setup IPA images"
+        echo "[setup-sushy] ERROR: Failed to setup IPA images"
         exit 1
     }
 fi
@@ -29,7 +38,7 @@ export OS_IDENTITY_API_VERSION=3
 export OS_USER_DOMAIN_NAME=Default
 export OS_SYSTEM_SCOPE=all
 
-echo "[setup-vbmc] Using SERVICE_HOST: ${SERVICE_HOST:-127.0.0.1}"
+echo "[setup-sushy] Using SERVICE_HOST: ${SERVICE_HOST:-127.0.0.1}"
 
 # Configuration from environment (set by job config)
 IRONIC_VM_COUNT=${IRONIC_VM_COUNT:-1}
@@ -37,105 +46,113 @@ IRONIC_VM_SPECS_CPU=${IRONIC_VM_SPECS_CPU:-2}
 IRONIC_VM_SPECS_RAM=${IRONIC_VM_SPECS_RAM:-2750}
 IRONIC_VM_SPECS_DISK=${IRONIC_VM_SPECS_DISK:-4}
 IRONIC_BOOT_MODE=${IRONIC_BOOT_MODE:-bios}
-VBMC_BASE_PORT=${VBMC_BASE_PORT:-6230}
+SUSHY_EMULATOR_PORT=${SUSHY_EMULATOR_PORT:-8000}
 
 # Paths
 LIBVIRT_DIR="/var/lib/libvirt/images"
-VBMC_CONFIG_DIR="/root/.vbmc"
+SUSHY_CONFIG_DIR="/etc/sushy"
 
 # Ensure directories exist
 mkdir -p "$LIBVIRT_DIR"
-mkdir -p "$VBMC_CONFIG_DIR"
-
-# Configure libvirt for container environment
-if [[ -f /usr/local/bin/configure-libvirt.sh ]]; then
-    /usr/local/bin/configure-libvirt.sh || {
-        echo "[setup-vbmc] ERROR: Failed to configure libvirt"
-        exit 1
-    }
-fi
+mkdir -p "$SUSHY_CONFIG_DIR"
 
 # Start libvirtd
-echo "[setup-vbmc] Starting libvirtd..."
+echo "[setup-sushy] Starting libvirtd..."
 if ! systemctl is-active --quiet libvirtd; then
     systemctl start libvirtd
     sleep 2
 fi
 
-# Start VirtualBMC daemon
-echo "[setup-vbmc] Starting VirtualBMC daemon..."
+# Configure Sushy-Tools emulator
+echo "[setup-sushy] Configuring Sushy-Tools emulator..."
+cat > "${SUSHY_CONFIG_DIR}/sushy-emulator.conf" << EOF
+# Sushy-Tools Redfish BMC Emulator Configuration
+# See: https://opendev.org/openstack/sushy-tools
 
-# Clean up any stale VirtualBMC state
-# The master.pid file can prevent daemon from starting
-echo "[setup-vbmc] Cleaning up stale VirtualBMC state..."
-rm -f /root/.vbmc/master.pid
-pkill -9 vbmcd 2>/dev/null || true
+# Network configuration
+SUSHY_EMULATOR_LISTEN_IP = u'0.0.0.0'
+SUSHY_EMULATOR_LISTEN_PORT = ${SUSHY_EMULATOR_PORT}
+
+# libvirt backend (manages VMs)
+SUSHY_EMULATOR_LIBVIRT_URI = u'qemu:///system'
+
+# Boot configuration
+SUSHY_EMULATOR_IGNORE_BOOT_DEVICE = False
+SUSHY_EMULATOR_BOOT_LOADER_MAP = {
+    u'UEFI': {
+        u'x86_64': u'/usr/share/OVMF/OVMF_CODE.fd'
+    },
+    u'Legacy': {}
+}
+EOF
+
+echo "[setup-sushy]   Configuration written to ${SUSHY_CONFIG_DIR}/sushy-emulator.conf"
+
+# Start Sushy-Tools emulator daemon
+echo "[setup-sushy] Starting Sushy-Tools emulator daemon..."
+
+# Clean up any existing sushy-emulator processes
+echo "[setup-sushy] Cleaning up stale Sushy-Tools processes..."
+pkill -9 -f sushy-emulator 2>/dev/null || true
 sleep 1
 
-# Start vbmcd in background without --foreground
-# The daemon will fork itself properly
-echo "[setup-vbmc] Starting vbmcd daemon..."
-vbmcd &
-VBMCD_PID=$!
+# Start sushy-emulator in background
+echo "[setup-sushy] Starting sushy-emulator daemon on port ${SUSHY_EMULATOR_PORT}..."
+sushy-emulator --config "${SUSHY_CONFIG_DIR}/sushy-emulator.conf" > /var/log/sushy-emulator.log 2>&1 &
+SUSHY_PID=$!
 
-# Wait for vbmcd to be ready (up to 10 seconds)
-echo "[setup-vbmc] Waiting for VirtualBMC daemon to start (PID: $VBMCD_PID)..."
-for i in {1..10}; do
-    if vbmc list &>/dev/null; then
-        echo "[setup-vbmc] VirtualBMC daemon ready"
+# Wait for sushy-emulator to be ready (up to 30 seconds)
+echo "[setup-sushy] Waiting for Sushy-Tools daemon to start (PID: $SUSHY_PID)..."
+for i in {1..30}; do
+    if curl -s http://127.0.0.1:${SUSHY_EMULATOR_PORT}/redfish/v1/ > /dev/null 2>&1; then
+        echo "[setup-sushy] ✓ Sushy-Tools daemon is ready"
         break
     fi
-    echo "[setup-vbmc]   Waiting... ($i/10)"
+    if [[ $i -eq 30 ]]; then
+        echo "[setup-sushy] ERROR: Sushy-Tools daemon not responding after 30 seconds"
+        echo "[setup-sushy] Checking for issues..."
+        ps aux | grep sushy-emulator || true
+        echo "[setup-sushy] Sushy-emulator logs:"
+        cat /var/log/sushy-emulator.log || true
+        exit 1
+    fi
+    echo "[setup-sushy]   Waiting... ($i/30)"
     sleep 1
 done
 
-# Verify daemon is responding
-if ! vbmc list &>/dev/null; then
-    echo "[setup-vbmc] ERROR: VirtualBMC daemon not responding after 10 seconds"
-    echo "[setup-vbmc] Checking for issues..."
-    ls -la /root/.vbmc/ 2>/dev/null || true
-    ps aux | grep vbmc || true
-    exit 1
+# Test Redfish API
+echo "[setup-sushy] Testing Redfish API..."
+if curl -s http://127.0.0.1:${SUSHY_EMULATOR_PORT}/redfish/v1/ | grep -q "ServiceRoot"; then
+    echo "[setup-sushy]   ✓ Redfish API is responding"
+else
+    echo "[setup-sushy]   ✗ WARNING: Redfish API may not be working correctly"
 fi
-
-# Clean up all existing VirtualBMC nodes (from previous runs)
-# This prevents port conflicts when we create new nodes
-echo "[setup-vbmc] Cleaning up existing VirtualBMC nodes..."
-vbmc list --format value -c "Domain name" 2>/dev/null | while read -r domain; do
-    if [[ -n "$domain" ]]; then
-        echo "[setup-vbmc]   Removing stale node: $domain"
-        vbmc stop "$domain" 2>/dev/null || true
-        vbmc delete "$domain" 2>/dev/null || true
-    fi
-done
-echo "[setup-vbmc]   Cleanup complete"
 
 # Clean up all existing Ironic baremetal nodes (from previous runs)
 # This prevents resource conflicts and stale Placement providers
-echo "[setup-vbmc] Cleaning up existing Ironic baremetal nodes..."
+echo "[setup-sushy] Cleaning up existing Ironic baremetal nodes..."
 openstack baremetal node list -f value -c UUID 2>/dev/null | while read -r node_uuid; do
     if [[ -n "$node_uuid" ]]; then
-        echo "[setup-vbmc]   Deleting stale node: $node_uuid"
+        echo "[setup-sushy]   Deleting stale node: $node_uuid"
         openstack baremetal node delete "$node_uuid" 2>/dev/null || true
     fi
 done
-echo "[setup-vbmc]   Cleanup complete"
+echo "[setup-sushy]   Cleanup complete"
 
 # Create virtual baremetal nodes
 for i in $(seq 0 $((IRONIC_VM_COUNT - 1))); do
     NODE_NAME="baremetal-${i}"
     MAC_ADDRESS="52:54:00:$(printf '%02x:%02x:%02x' $((RANDOM%256)) $((RANDOM%256)) $i)"
-    VBMC_PORT=$((VBMC_BASE_PORT + i))
     DISK_PATH="${LIBVIRT_DIR}/${NODE_NAME}.qcow2"
 
-    echo "[setup-vbmc] Creating node: $NODE_NAME (MAC: $MAC_ADDRESS, VBMC port: $VBMC_PORT)"
+    echo "[setup-sushy] Creating node: $NODE_NAME (MAC: $MAC_ADDRESS)"
 
     # Create disk image
     if [[ ! -f "$DISK_PATH" ]]; then
-        echo "[setup-vbmc]   Creating disk: $DISK_PATH (${IRONIC_VM_SPECS_DISK}G)"
+        echo "[setup-sushy]   Creating disk: $DISK_PATH (${IRONIC_VM_SPECS_DISK}G)"
         qemu-img create -f qcow2 "$DISK_PATH" "${IRONIC_VM_SPECS_DISK}G"
     else
-        echo "[setup-vbmc]   Disk already exists: $DISK_PATH"
+        echo "[setup-sushy]   Disk already exists: $DISK_PATH"
     fi
 
     # Create VM XML definition
@@ -193,116 +210,101 @@ EOF
 EOF
 
     # Define the VM in libvirt
-    echo "[setup-vbmc]   Defining VM in libvirt..."
+    echo "[setup-sushy]   Defining VM in libvirt..."
     if virsh list --all | grep -q "$NODE_NAME"; then
-        echo "[setup-vbmc]   VM already defined, undefining first..."
+        echo "[setup-sushy]   VM already defined, undefining first..."
         virsh destroy "$NODE_NAME" 2>/dev/null || true
         virsh undefine "$NODE_NAME" 2>/dev/null || true
     fi
     virsh define "/tmp/${NODE_NAME}.xml"
 
-    # Add to VirtualBMC
-    echo "[setup-vbmc]   Adding to VirtualBMC..."
-    if vbmc list | grep -q "$NODE_NAME"; then
-        echo "[setup-vbmc]   Already in VirtualBMC, deleting first..."
-        vbmc delete "$NODE_NAME" || true
-    fi
-
-    vbmc add "$NODE_NAME" \
-        --port "$VBMC_PORT" \
-        --username admin \
-        --password password \
-        --address 127.0.0.1
-
-    vbmc start "$NODE_NAME"
-    sleep 1
-
-    # Verify VirtualBMC is running
-    if vbmc show "$NODE_NAME" | grep -q "running"; then
-        echo "[setup-vbmc]   VirtualBMC running for $NODE_NAME"
+    # Verify VM is visible to Sushy-Tools
+    echo "[setup-sushy]   Verifying VM is visible to Sushy-Tools..."
+    sleep 2
+    if curl -s "http://127.0.0.1:${SUSHY_EMULATOR_PORT}/redfish/v1/Systems/" | grep -q "$NODE_NAME"; then
+        echo "[setup-sushy]   ✓ VM is visible to Redfish API"
     else
-        echo "[setup-vbmc]   WARNING: VirtualBMC may not be running for $NODE_NAME"
+        echo "[setup-sushy]   ✗ WARNING: VM may not be visible to Redfish API yet"
     fi
 
     # Wait for Ironic API to be ready (only on first node)
     if [[ $i -eq 0 ]]; then
         # Ensure Apache is running (it proxies API requests to uWSGI)
-        echo "[setup-vbmc] Checking Apache HTTP proxy..."
+        echo "[setup-sushy] Checking Apache HTTP proxy..."
         if ! systemctl is-active --quiet apache2; then
-            echo "[setup-vbmc]   Apache not running, starting it..."
+            echo "[setup-sushy]   Apache not running, starting it..."
             systemctl start apache2
             sleep 3
         fi
 
         if systemctl is-active --quiet apache2; then
-            echo "[setup-vbmc]   Apache is running"
+            echo "[setup-sushy]   Apache is running"
         else
-            echo "[setup-vbmc]   WARNING: Apache failed to start - API may not be accessible"
+            echo "[setup-sushy]   WARNING: Apache failed to start - API may not be accessible"
             systemctl status apache2 --no-pager || true
         fi
 
-        echo "[setup-vbmc] Waiting for Ironic API to be ready..."
-        max_wait=180  # Increased from 120 to 180 seconds
+        echo "[setup-sushy] Waiting for Ironic API to be ready..."
+        max_wait=180  # 3 minutes
         elapsed=0
         while [[ $elapsed -lt $max_wait ]]; do
             if openstack baremetal driver list &>/dev/null; then
-                echo "[setup-vbmc] Ironic API is ready"
+                echo "[setup-sushy] ✓ Ironic API is ready"
                 break
             fi
-            echo "[setup-vbmc]   Waiting for API... ($elapsed/$max_wait seconds)"
+            echo "[setup-sushy]   Waiting for API... ($elapsed/$max_wait seconds)"
             sleep 5
             ((elapsed+=5))
         done
 
         if [[ $elapsed -ge $max_wait ]]; then
-            echo "[setup-vbmc] ERROR: Ironic API not ready after ${max_wait}s"
-            echo "[setup-vbmc] Checking Apache (HTTP proxy)..."
+            echo "[setup-sushy] ERROR: Ironic API not ready after ${max_wait}s"
+            echo "[setup-sushy] Checking Apache (HTTP proxy)..."
             systemctl status apache2 --no-pager || true
             echo ""
-            echo "[setup-vbmc] Checking Ironic services..."
+            echo "[setup-sushy] Checking Ironic services..."
             systemctl status devstack@ir-api.service --no-pager || true
             systemctl status devstack@ir-cond.service --no-pager || true
             echo ""
-            echo "[setup-vbmc] Checking RabbitMQ status..."
+            echo "[setup-sushy] Checking RabbitMQ status..."
             systemctl status rabbitmq-server --no-pager || true
-            rabbitmqctl status || true
             echo ""
-            echo "[setup-vbmc] Checking listening ports..."
-            ss -tlnp | grep -E '6385|:80 ' || echo "No services listening on port 6385 or 80"
-            echo ""
-            echo "[setup-vbmc] Checking recent Apache logs..."
-            journalctl -u apache2 -n 30 --no-pager || true
-            echo ""
-            echo "[setup-vbmc] Checking recent Ironic API logs..."
+            echo "[setup-sushy] Checking recent Ironic API logs..."
             journalctl -u devstack@ir-api.service -n 30 --no-pager || true
-            echo ""
-            echo "[setup-vbmc] Checking recent Ironic Conductor logs..."
-            journalctl -u devstack@ir-cond.service -n 30 --no-pager || true
-            echo ""
-            echo "[setup-vbmc] Testing direct API access (should be proxied by Apache)..."
-            curl -v http://127.0.0.1:6385/ 2>&1 || true
             exit 1
+        fi
+
+        # Verify Redfish driver is available
+        echo "[setup-sushy] Verifying Redfish driver availability..."
+        if openstack baremetal driver list -f value -c "Supported driver(s)" | grep -q "redfish"; then
+            echo "[setup-sushy]   ✓ Redfish driver is available"
+        else
+            echo "[setup-sushy]   ✗ WARNING: Redfish driver may not be enabled"
+            echo "[setup-sushy]   Available drivers:"
+            openstack baremetal driver list | sed 's/^/    /'
         fi
     fi
 
-    # Register node in Ironic
-    echo "[setup-vbmc]   Registering node in Ironic..."
+    # Register node in Ironic with Redfish driver
+    echo "[setup-sushy]   Registering node in Ironic with Redfish driver..."
 
     # Check if node already exists
     if openstack baremetal node list -f value -c Name | grep -q "^${NODE_NAME}$"; then
-        echo "[setup-vbmc]   Node already exists in Ironic, deleting first..."
+        echo "[setup-sushy]   Node already exists in Ironic, deleting first..."
         NODE_UUID=$(openstack baremetal node list -f value -c UUID -c Name | grep "$NODE_NAME" | awk '{print $1}')
         openstack baremetal node delete "$NODE_UUID" || true
     fi
 
-    # Create node
+    # Create node with Redfish driver
+    # This is the KEY difference from IPMI setup
     NODE_UUID=$(openstack baremetal node create \
         --name "$NODE_NAME" \
-        --driver ipmi \
-        --driver-info ipmi_address=127.0.0.1 \
-        --driver-info ipmi_port="$VBMC_PORT" \
-        --driver-info ipmi_username=admin \
-        --driver-info ipmi_password=password \
+        --driver redfish \
+        --driver-info redfish_address=http://127.0.0.1:${SUSHY_EMULATOR_PORT}/redfish/v1/Systems/${NODE_NAME} \
+        --driver-info redfish_system_id=${NODE_NAME} \
+        --driver-info redfish_username=admin \
+        --driver-info redfish_password=password \
+        --driver-info redfish_verify_ca=false \
         --driver-info deploy_kernel=http://${SERVICE_HOST}:3928/ipa-kernel \
         --driver-info deploy_ramdisk=http://${SERVICE_HOST}:3928/ipa-ramdisk \
         --property cpus="$IRONIC_VM_SPECS_CPU" \
@@ -312,10 +314,10 @@ EOF
         --resource-class baremetal \
         -f value -c uuid)
 
-    echo "[setup-vbmc]   Node created: $NODE_UUID"
+    echo "[setup-sushy]   Node created: $NODE_UUID"
 
     # Add port (NIC)
-    echo "[setup-vbmc]   Adding port to node..."
+    echo "[setup-sushy]   Adding port to node..."
     openstack baremetal port create \
         --node "$NODE_UUID" \
         "$MAC_ADDRESS"
@@ -326,45 +328,44 @@ EOF
         --deploy-interface ${IRONIC_DEFAULT_DEPLOY_INTERFACE:-direct}
 
     # Set node to manageable state
-    echo "[setup-vbmc]   Setting node to manageable state..."
+    echo "[setup-sushy]   Setting node to manageable state..."
     openstack baremetal node manage "$NODE_UUID" --wait 60
 
     # Provide the node (make it available)
-    echo "[setup-vbmc]   Providing node (making available)..."
+    echo "[setup-sushy]   Providing node (making available)..."
     openstack baremetal node provide "$NODE_UUID" --wait 120
 
-    echo "[setup-vbmc]   Node $NODE_NAME ready (UUID: $NODE_UUID)"
+    echo "[setup-sushy]   Node $NODE_NAME ready (UUID: $NODE_UUID)"
 done
 
 # Make ironic-provision network shared for Tempest dynamic credentials
 # Dynamic credentials create new test projects that need access to this network
-echo "[setup-vbmc] Configuring ironic-provision network..."
+echo "[setup-sushy] Configuring ironic-provision network..."
 unset OS_SYSTEM_SCOPE
 export OS_PROJECT_NAME=admin
 export OS_PROJECT_DOMAIN_NAME=Default
 
 if openstack network show ironic-provision >/dev/null 2>&1; then
-    echo "[setup-vbmc]   Making ironic-provision network shared..."
+    echo "[setup-sushy]   Making ironic-provision network shared..."
     openstack network set --share ironic-provision
-    echo "[setup-vbmc]   ironic-provision network is now shared across all projects"
+    echo "[setup-sushy]   ironic-provision network is now shared across all projects"
 else
-    echo "[setup-vbmc]   WARNING: ironic-provision network not found, skipping share configuration"
+    echo "[setup-sushy]   WARNING: ironic-provision network not found, skipping share configuration"
 fi
 
 # Create baremetal flavor for Nova
-echo "[setup-vbmc] Creating baremetal flavor..."
+echo "[setup-sushy] Creating baremetal flavor..."
 
 # Nova operations require project scope, not system scope
-echo "[setup-vbmc]   Using project-scoped credentials for Nova operations..."
+echo "[setup-sushy]   Using project-scoped credentials for Nova operations..."
 
 if openstack flavor show baremetal >/dev/null 2>&1; then
-    echo "[setup-vbmc]   Flavor 'baremetal' already exists, deleting..."
+    echo "[setup-sushy]   Flavor 'baremetal' already exists, deleting..."
     openstack flavor delete baremetal || true
 fi
 
 # Create the flavor with specs matching our virtual baremetal nodes
 # Use minimal values since we're using custom resource classes
-# Note: Not setting capabilities:boot_mode as it's auto-detected from node firmware
 # Make it public so Tempest's dynamically created projects can use it
 openstack flavor create \
     --public \
@@ -378,10 +379,10 @@ openstack flavor create \
     --property cpu_arch=x86_64 \
     baremetal
 
-echo "[setup-vbmc]   Flavor 'baremetal' created successfully"
+echo "[setup-sushy]   Flavor 'baremetal' created successfully"
 
 # Verify flavor is visible and public
-echo "[setup-vbmc]   Verifying flavor visibility..."
+echo "[setup-sushy]   Verifying flavor visibility..."
 openstack flavor show baremetal -f value -c name -c "OS-FLV-EXT-DATA:ephemeral" || echo "WARNING: Flavor not visible!"
 openstack flavor list --all | grep baremetal || echo "WARNING: Flavor not in list!"
 
@@ -391,54 +392,57 @@ unset OS_PROJECT_NAME
 unset OS_PROJECT_DOMAIN_NAME
 
 # Verify nodes are available
-echo "[setup-vbmc] Verifying nodes..."
+echo "[setup-sushy] Verifying nodes..."
 openstack baremetal node list
 
-# Show VirtualBMC status
-echo "[setup-vbmc] VirtualBMC status:"
-vbmc list
+# Show Sushy-Tools status
+echo "[setup-sushy] Sushy-Tools emulator status:"
+ps aux | grep sushy-emulator | grep -v grep || echo "  WARNING: Process not found"
+echo "[setup-sushy] Sushy-Tools listening on: http://127.0.0.1:${SUSHY_EMULATOR_PORT}"
+echo "[setup-sushy] Redfish Systems:"
+curl -s http://127.0.0.1:${SUSHY_EMULATOR_PORT}/redfish/v1/Systems/ | grep -o '"Name":"[^"]*"' | sed 's/"Name":"/  - /;s/"$//' || echo "  ERROR: Could not list systems"
 
-echo "[setup-vbmc] VirtualBMC setup complete - $IRONIC_VM_COUNT node(s) ready"
+echo "[setup-sushy] Sushy-Tools setup complete - $IRONIC_VM_COUNT node(s) ready with Redfish"
 
 # Discover and map compute hosts to Nova cells
 # This is required for Nova scheduler to find the compute hosts
-echo "[setup-vbmc] Waiting for Nova compute service to fully register (10 seconds)..."
+echo "[setup-sushy] Waiting for Nova compute service to fully register (10 seconds)..."
 sleep 10
-echo "[setup-vbmc] Discovering compute hosts for Nova cells..."
+echo "[setup-sushy] Discovering compute hosts for Nova cells..."
 cd /opt/stack/nova && su -s /bin/bash stack -c "nova-manage cell_v2 discover_hosts --verbose 2>&1" || echo "  WARNING: Cell discovery failed"
-echo "[setup-vbmc] Compute host discovery complete"
+echo "[setup-sushy] Compute host discovery complete"
 
 # CRITICAL FIX: Restart Nova compute to force resource provider refresh
 # Nova compute needs to re-scan Ironic nodes and register them in Placement
 # Without this, the nodes won't appear as available resources for scheduling
-echo "[setup-vbmc] Restarting Nova compute to refresh resource providers..."
+echo "[setup-sushy] Restarting Nova compute to refresh resource providers..."
 systemctl restart devstack@n-cpu.service
 sleep 10
 
 # Wait for Nova compute to re-register with updated inventory
-echo "[setup-vbmc] Waiting for Nova compute to update Placement (30 seconds)..."
+echo "[setup-sushy] Waiting for Nova compute to update Placement (30 seconds)..."
 sleep 30
 
 # Debug Nova/Placement integration
-echo "[setup-vbmc] ====== DEBUG: Nova/Placement Integration ======"
+echo "[setup-sushy] ====== DEBUG: Nova/Placement Integration ======"
 
-echo "[setup-vbmc] Nova compute service status:"
+echo "[setup-sushy] Nova compute service status:"
 systemctl is-active devstack@n-cpu.service && echo "  RUNNING" || echo "  NOT RUNNING!"
 
-echo "[setup-vbmc] Placement resource providers:"
+echo "[setup-sushy] Placement resource providers:"
 openstack resource provider list -f value -c uuid -c name 2>/dev/null || echo "  ERROR: Could not list providers"
 
-echo "[setup-vbmc] Nova compute services:"
+echo "[setup-sushy] Nova compute services:"
 openstack compute service list -f value -c Binary -c Host -c Status 2>/dev/null || echo "  ERROR: Could not list services"
 
-echo "[setup-vbmc] Checking if node is in Placement:"
+echo "[setup-sushy] Checking if node is in Placement:"
 NODE_UUID=$(openstack baremetal node list -f value -c UUID 2>/dev/null | head -1)
 if [[ -n "$NODE_UUID" ]]; then
     echo "  Node UUID: $NODE_UUID"
     if openstack resource provider list -f value -c uuid 2>/dev/null | grep -q "$NODE_UUID"; then
         echo "  ✓ Node IS registered in Placement"
         # Show the node's inventory
-        echo "[setup-vbmc] Node inventory in Placement:"
+        echo "[setup-sushy] Node inventory in Placement:"
         openstack resource provider inventory list "$NODE_UUID" -f table 2>/dev/null | sed 's/^/  /'
     else
         echo "  ✗ Node NOT in Placement - provisioning will FAIL!"
@@ -448,7 +452,7 @@ if [[ -n "$NODE_UUID" ]]; then
 fi
 
 # Verify resource providers have inventory
-echo "[setup-vbmc] Verifying resource providers have inventory..."
+echo "[setup-sushy] Verifying resource providers have inventory..."
 PROVIDERS_WITH_INVENTORY=0
 openstack resource provider list -f value -c uuid 2>/dev/null | while read -r provider_uuid; do
     INVENTORY_COUNT=$(openstack resource provider inventory list "$provider_uuid" -f value 2>/dev/null | wc -l)

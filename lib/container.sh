@@ -98,6 +98,12 @@ container_start() {
                 log_debug "  Mounting: $script_name"
             fi
         done
+
+        # Mount config directory if it exists (for modular component configs)
+        if [[ -d "$OSFORGE_ROOT/images/base/files/scripts/config" ]]; then
+            mount_args+=(-v "$OSFORGE_ROOT/images/base/files/scripts/config:/usr/local/bin/config:ro")
+            log_debug "  Mounting: config directory"
+        fi
     else
         log_debug "Development mode disabled - using image scripts"
     fi
@@ -110,8 +116,13 @@ container_start() {
         --privileged \
         --systemd=always \
         --device /dev/kvm \
+        --device /dev/net/tun \
         --cgroupns=host \
         --cap-add SYS_ADMIN \
+        --cap-add NET_ADMIN \
+        --security-opt label=disable \
+        --security-opt apparmor=unconfined \
+        --security-opt seccomp=unconfined \
         --memory "$MEMORY" \
         --cpus "$CPUS" \
         -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
