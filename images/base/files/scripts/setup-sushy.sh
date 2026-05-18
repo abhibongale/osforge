@@ -76,6 +76,10 @@ SUSHY_EMULATOR_LISTEN_PORT = ${SUSHY_EMULATOR_PORT}
 # libvirt backend (manages VMs)
 SUSHY_EMULATOR_LIBVIRT_URI = u'qemu:///system'
 
+# HTTP Basic Authentication - DISABLED for testing
+# Ironic may not be sending credentials correctly, test without auth first
+# SUSHY_EMULATOR_AUTH_FILE = u'/etc/sushy/htpasswd'
+
 # Boot configuration
 SUSHY_EMULATOR_IGNORE_BOOT_DEVICE = False
 SUSHY_EMULATOR_BOOT_LOADER_MAP = {
@@ -88,6 +92,21 @@ EOF
 
 echo "[setup-sushy]   Configuration written to ${SUSHY_CONFIG_DIR}/sushy-emulator.conf"
 
+# PHASE 2: Configure HTTP Basic Authentication to match Ironic driver expectations
+echo "[setup-sushy] Configuring HTTP Basic Authentication..."
+
+# Install htpasswd utility if needed
+if ! command -v htpasswd &> /dev/null; then
+    echo "[setup-sushy]   Installing apache2-utils for htpasswd..."
+    apt-get update -qq && apt-get install -y apache2-utils >/dev/null 2>&1
+fi
+
+# Create htpasswd file with admin:password (matches driver_info)
+htpasswd -nbB admin password > "${SUSHY_CONFIG_DIR}/htpasswd"
+chmod 600 "${SUSHY_CONFIG_DIR}/htpasswd"
+
+echo "[setup-sushy]   ✓ Authentication file created at ${SUSHY_CONFIG_DIR}/htpasswd"
+
 # Start Sushy-Tools emulator daemon
 echo "[setup-sushy] Starting Sushy-Tools emulator daemon..."
 
@@ -96,9 +115,9 @@ echo "[setup-sushy] Cleaning up stale Sushy-Tools processes..."
 pkill -9 -f sushy-emulator 2>/dev/null || true
 sleep 1
 
-# Start sushy-emulator in background
+# Start sushy-emulator in background with debug logging enabled
 echo "[setup-sushy] Starting sushy-emulator daemon on port ${SUSHY_EMULATOR_PORT}..."
-sushy-emulator --config "${SUSHY_CONFIG_DIR}/sushy-emulator.conf" > /var/log/sushy-emulator.log 2>&1 &
+sushy-emulator --debug --config "${SUSHY_CONFIG_DIR}/sushy-emulator.conf" > /var/log/sushy-emulator.log 2>&1 &
 SUSHY_PID=$!
 
 # Wait for sushy-emulator to be ready (up to 30 seconds)
@@ -120,12 +139,12 @@ for i in {1..30}; do
     sleep 1
 done
 
-# Test Redfish API
+# Test Redfish API (no authentication for now)
 echo "[setup-sushy] Testing Redfish API..."
-if curl -s http://127.0.0.1:${SUSHY_EMULATOR_PORT}/redfish/v1/ | grep -q "ServiceRoot"; then
-    echo "[setup-sushy]   ✓ Redfish API is responding"
+if curl -s "http://127.0.0.1:${SUSHY_EMULATOR_PORT}/redfish/v1/" | grep -q "ServiceRoot"; then
+    echo "[setup-sushy]   ✓ Redfish API responding"
 else
-    echo "[setup-sushy]   ✗ WARNING: Redfish API may not be working correctly"
+    echo "[setup-sushy]   ✗ WARNING: Redfish API not responding"
 fi
 
 # Clean up all existing Ironic baremetal nodes (from previous runs)
@@ -218,13 +237,20 @@ EOF
     fi
     virsh define "/tmp/${NODE_NAME}.xml"
 
+    # Get the libvirt domain UUID
+    # Sushy-Tools uses the libvirt UUID as the Redfish system identifier, not the domain name
+    DOMAIN_UUID=$(virsh domuuid "$NODE_NAME")
+    echo "[setup-sushy]   Libvirt domain UUID: $DOMAIN_UUID"
+
     # Verify VM is visible to Sushy-Tools
     echo "[setup-sushy]   Verifying VM is visible to Sushy-Tools..."
     sleep 2
-    if curl -s "http://127.0.0.1:${SUSHY_EMULATOR_PORT}/redfish/v1/Systems/" | grep -q "$NODE_NAME"; then
-        echo "[setup-sushy]   ✓ VM is visible to Redfish API"
+    if curl -s "http://127.0.0.1:${SUSHY_EMULATOR_PORT}/redfish/v1/Systems/" | grep -q "$DOMAIN_UUID"; then
+        echo "[setup-sushy]   ✓ VM is visible to Redfish API (UUID: $DOMAIN_UUID)"
     else
-        echo "[setup-sushy]   ✗ WARNING: VM may not be visible to Redfish API yet"
+        echo "[setup-sushy]   ✗ WARNING: VM UUID may not be visible in Redfish API yet"
+        echo "[setup-sushy]   Available systems:"
+        curl -s "http://127.0.0.1:${SUSHY_EMULATOR_PORT}/redfish/v1/Systems/" | jq -r '.Members[]."@odata.id"' || true
     fi
 
     # Wait for Ironic API to be ready (only on first node)
@@ -295,15 +321,45 @@ EOF
         openstack baremetal node delete "$NODE_UUID" || true
     fi
 
+    # PHASE 3: Validate Redfish responses before node registration
+    echo "[setup-sushy]   Validating Redfish compliance before node registration..."
+
+    SYSTEM_RESPONSE=$(curl -s "http://127.0.0.1:${SUSHY_EMULATOR_PORT}/redfish/v1/Systems/${DOMAIN_UUID}")
+
+    # Check for required fields that sushy library expects
+    REQUIRED_FIELDS=("Id" "Name" "PowerState" "ProcessorSummary" "MemorySummary")
+    VALIDATION_FAILED=false
+
+    for field in "${REQUIRED_FIELDS[@]}"; do
+        if ! echo "$SYSTEM_RESPONSE" | jq -e ".$field" >/dev/null 2>&1; then
+            echo "[setup-sushy]     ✗ Missing required field: .$field"
+            VALIDATION_FAILED=true
+        else
+            echo "[setup-sushy]     ✓ Field present: .$field"
+        fi
+    done
+
+    if [[ "$VALIDATION_FAILED" == "true" ]]; then
+        echo "[setup-sushy]   ✗ CRITICAL: Redfish response missing required fields"
+        echo "[setup-sushy]   Response received:"
+        echo "$SYSTEM_RESPONSE" | jq '.' 2>/dev/null || echo "$SYSTEM_RESPONSE"
+        echo "[setup-sushy]   This will cause sushy library to receive None representation"
+        exit 1
+    fi
+
+    echo "[setup-sushy]   ✓ Redfish validation passed - all required fields present"
+
     # Create node with Redfish driver
     # This is the KEY difference from IPMI setup
+    # IMPORTANT: Use libvirt domain UUID as redfish_system_id, not the domain name
+    # Sushy-Tools exposes systems by their libvirt UUID, not by name
+    # CRITICAL FIX: redfish_address should be BASE + /redfish/v1, then driver adds /Systems/{id}
+    # Driver constructs: {redfish_address}/Systems/{redfish_system_id}
     NODE_UUID=$(openstack baremetal node create \
         --name "$NODE_NAME" \
         --driver redfish \
-        --driver-info redfish_address=http://127.0.0.1:${SUSHY_EMULATOR_PORT}/redfish/v1/Systems/${NODE_NAME} \
-        --driver-info redfish_system_id=${NODE_NAME} \
-        --driver-info redfish_username=admin \
-        --driver-info redfish_password=password \
+        --driver-info redfish_address=http://127.0.0.1:${SUSHY_EMULATOR_PORT}/redfish/v1 \
+        --driver-info redfish_system_id=${DOMAIN_UUID} \
         --driver-info redfish_verify_ca=false \
         --driver-info deploy_kernel=http://${SERVICE_HOST}:3928/ipa-kernel \
         --driver-info deploy_ramdisk=http://${SERVICE_HOST}:3928/ipa-ramdisk \
@@ -327,13 +383,127 @@ EOF
         --boot-interface ipxe \
         --deploy-interface ${IRONIC_DEFAULT_DEPLOY_INTERFACE:-direct}
 
+    # Debug: Verify Redfish endpoint before setting node to manageable
+    echo "[setup-sushy]   Debugging Redfish endpoint..."
+    REDFISH_BASE=$(openstack baremetal node show "$NODE_UUID" -f json 2>/dev/null | jq -r '.driver_info.redfish_address')
+    SYSTEM_ID=$(openstack baremetal node show "$NODE_UUID" -f json 2>/dev/null | jq -r '.driver_info.redfish_system_id')
+
+    # Check if redfish_address already contains the full system path
+    if [[ "$REDFISH_BASE" == */redfish/v1/Systems/* ]]; then
+        # Full path already in redfish_address
+        REDFISH_ADDR="$REDFISH_BASE"
+        echo "[setup-sushy]     Redfish address (full path): $REDFISH_ADDR"
+    elif [[ -n "$SYSTEM_ID" ]] && [[ "$SYSTEM_ID" != "null" ]]; then
+        # Base URL + system ID
+        REDFISH_ADDR="${REDFISH_BASE}/redfish/v1/Systems/${SYSTEM_ID}"
+        echo "[setup-sushy]     Redfish base: $REDFISH_BASE"
+        echo "[setup-sushy]     System ID: $SYSTEM_ID"
+        echo "[setup-sushy]     Full system URL: $REDFISH_ADDR"
+    else
+        # Just base URL, no system ID
+        REDFISH_ADDR="$REDFISH_BASE"
+        echo "[setup-sushy]     Redfish address: $REDFISH_ADDR"
+    fi
+
+    # Test if Redfish endpoint is accessible (no authentication)
+    echo "[setup-sushy]     Testing Redfish system endpoint..."
+    if curl -s -o /dev/null -w "%{http_code}" "$REDFISH_ADDR" | grep -q "200"; then
+        echo "[setup-sushy]     ✓ Redfish endpoint is accessible (HTTP 200)"
+    else
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$REDFISH_ADDR")
+        echo "[setup-sushy]     ✗ WARNING: Redfish endpoint returned HTTP $HTTP_CODE"
+        echo "[setup-sushy]     Response body:"
+        curl -s "$REDFISH_ADDR" | jq '.' 2>/dev/null || curl -s "$REDFISH_ADDR"
+    fi
+
+    # PHASE 1: Comprehensive debugging - capture HTTP headers and JSON structure
+    echo "[setup-sushy]     === Detailed Redfish Response Analysis ==="
+
+    echo "[setup-sushy]       HTTP Headers:"
+    curl -v "$REDFISH_ADDR" 2>&1 | grep -E "< HTTP|< Content-Type|< Content-Length" | sed 's/^/        /'
+
+    echo "[setup-sushy]       Response Body (first 500 chars):"
+    RESPONSE_BODY=$(curl -s "$REDFISH_ADDR")
+    echo "$RESPONSE_BODY" | head -c 500
+    echo ""
+
+    echo "[setup-sushy]       Validating JSON structure:"
+    if echo "$RESPONSE_BODY" | jq '.' >/dev/null 2>&1; then
+        echo "[setup-sushy]       ✓ Valid JSON response"
+
+        # Check critical Redfish fields that sushy library expects
+        echo "[setup-sushy]       Checking required Redfish fields:"
+        for field in "@odata.id" "Id" "Name" "PowerState" "ProcessorSummary" "MemorySummary"; do
+            if echo "$RESPONSE_BODY" | jq -e ".\"$field\"" >/dev/null 2>&1; then
+                FIELD_VALUE=$(echo "$RESPONSE_BODY" | jq -r ".\"$field\"" 2>/dev/null | head -c 100)
+                echo "[setup-sushy]         ✓ Contains .$field = $FIELD_VALUE"
+            else
+                echo "[setup-sushy]         ✗ CRITICAL: Missing .$field (sushy library WILL fail!)"
+                if [[ "$field" == "@odata.id" ]]; then
+                    echo "[setup-sushy]           This is WHY sushy constructs malformed URLs!"
+                fi
+            fi
+        done
+
+        # If @odata.id is present, verify it contains the full path
+        if echo "$RESPONSE_BODY" | jq -e '."@odata.id"' >/dev/null 2>&1; then
+            ODATA_ID=$(echo "$RESPONSE_BODY" | jq -r '."@odata.id"')
+            if [[ "$ODATA_ID" == /redfish/v1/Systems/* ]]; then
+                echo "[setup-sushy]         ✓ @odata.id has correct format: $ODATA_ID"
+            else
+                echo "[setup-sushy]         ✗ WARNING: @odata.id format may be wrong: $ODATA_ID"
+                echo "[setup-sushy]           Expected: /redfish/v1/Systems/{uuid}"
+            fi
+        fi
+    else
+        echo "[setup-sushy]       ✗ CRITICAL: INVALID JSON - sushy library will receive None!"
+        echo "[setup-sushy]       Raw response:"
+        echo "$RESPONSE_BODY" | sed 's/^/        /'
+    fi
+    echo "[setup-sushy]     === End Response Analysis ==="
+
+    # Check if system is visible in Sushy-Tools
+    echo "[setup-sushy]     Checking if system is visible in Redfish API..."
+    ALL_SYSTEMS=$(curl -s "http://127.0.0.1:${SUSHY_EMULATOR_PORT}/redfish/v1/Systems/")
+    # SYSTEM_ID should be the libvirt domain UUID, not the name
+    if echo "$ALL_SYSTEMS" | grep -q "$SYSTEM_ID"; then
+        echo "[setup-sushy]     ✓ System $SYSTEM_ID is visible in Redfish API"
+    else
+        echo "[setup-sushy]     ✗ WARNING: System $SYSTEM_ID NOT found in Redfish API"
+        echo "[setup-sushy]     Expected UUID: $DOMAIN_UUID"
+        echo "[setup-sushy]     Available systems:"
+        echo "$ALL_SYSTEMS" | jq '.Members' 2>/dev/null || echo "$ALL_SYSTEMS"
+    fi
+
+    # Check Sushy-Tools logs for errors
+    if [[ -f /var/log/sushy-emulator.log ]]; then
+        echo "[setup-sushy]     Last 10 lines of Sushy-Tools log:"
+        tail -10 /var/log/sushy-emulator.log
+    fi
+
     # Set node to manageable state
     echo "[setup-sushy]   Setting node to manageable state..."
-    openstack baremetal node manage "$NODE_UUID" --wait 60
+    if ! openstack baremetal node manage "$NODE_UUID" --wait 60; then
+        echo "[setup-sushy]   ✗ ERROR: Failed to set node to manageable state"
+        echo "[setup-sushy]   Checking node status and errors..."
+        openstack baremetal node show "$NODE_UUID" -c provisioning_state -c last_error -f yaml
+
+        echo "[setup-sushy]   Checking Ironic conductor logs for errors..."
+        journalctl -u devstack@ir-cond.service --since "2 minutes ago" --no-pager | grep -E "ERROR|redfish|$NODE_UUID" | tail -20 || true
+
+        echo "[setup-sushy]   Node validation status:"
+        openstack baremetal node validate "$NODE_UUID" || true
+
+        exit 1
+    fi
 
     # Provide the node (make it available)
     echo "[setup-sushy]   Providing node (making available)..."
-    openstack baremetal node provide "$NODE_UUID" --wait 120
+    if ! openstack baremetal node provide "$NODE_UUID" --wait 120; then
+        echo "[setup-sushy]   ✗ ERROR: Failed to provide node"
+        openstack baremetal node show "$NODE_UUID" -c provisioning_state -c last_error -f yaml
+        exit 1
+    fi
 
     echo "[setup-sushy]   Node $NODE_NAME ready (UUID: $NODE_UUID)"
 done
